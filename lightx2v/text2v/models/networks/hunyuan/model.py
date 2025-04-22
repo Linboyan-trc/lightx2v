@@ -12,6 +12,7 @@ from lightx2v.attentions.distributed.ulysses.wrap import parallelize_hunyuan
 
 
 class HunyuanModel:
+    # 1. 加载模型
     pre_weight_class = HunyuanPreWeights
     post_weight_class = HunyuanPostWeights
     transformer_weight_class = HunyuanTransformerWeights
@@ -74,6 +75,7 @@ class HunyuanModel:
         self.post_weight.to_cuda()
         self.transformer_weights.to_cuda()
 
+    # 2. 推断
     @torch.no_grad()
     def infer(self, text_encoder_output, image_encoder_output, args):
         pre_infer_out = self.pre_infer.infer(

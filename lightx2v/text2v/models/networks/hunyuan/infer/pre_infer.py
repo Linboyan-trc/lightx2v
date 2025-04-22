@@ -5,10 +5,13 @@ from lightx2v.attentions import attention
 
 
 class HunyuanPreInfer():
+    # 1. 加载模型
     def __init__(self):
         self.heads_num = 24
 
+    # 2. 推断
     def infer(self, weights, x, t, text_states, text_mask, text_states_2, freqs_cos, freqs_sin, guidance):
+        # 1. weights
         time_out = self.infer_time_in(weights, t)
         img_out = self.infer_img_in(weights, x)
         infer_text_out = self.infer_text_in(weights, text_states, text_mask, t)
@@ -17,6 +20,7 @@ class HunyuanPreInfer():
         guidance_out = self.infer_guidance_in(weights, guidance)
         vec = vec + guidance_out
 
+        # 2. 运算
         txt_seq_len = infer_text_out.shape[0]
         img_seq_len = img_out.shape[1]
         batch_size = text_mask.shape[0]

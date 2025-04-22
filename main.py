@@ -1,3 +1,5 @@
+# 2. 导入库
+################################################## 2.1 现成库 ##############################################################################################################
 import argparse
 import torch
 import torch.distributed as dist
@@ -8,43 +10,72 @@ import json
 import torchvision.transforms.functional as TF
 import numpy as np
 from PIL import Image
-from lightx2v.text2v.models.text_encoders.hf.llama.model import TextEncoderHFLlamaModel
-from lightx2v.text2v.models.text_encoders.hf.clip.model import TextEncoderHFClipModel
-from lightx2v.text2v.models.text_encoders.hf.t5.model import T5EncoderModel
 
+########## 2.2 lightx2v/common   backend_infer(trt) + offload + ops(conv, mm, norm) #######################################################################################
+from lightx2v.common.ops import *
+
+########## 2.3 lightx2v/image2v  models(wan)                                        #######################################################################################
+from lightx2v.image2v.models.wan.model import CLIPModel
+
+########## 2.4 lightx2v/text2v   models     schedulers(hunyuan + wan); text_encoders(hf/clip + llama + t5) + networks(hunyuan + wan) + video_encoders(hf + trt) ###########
+
+########## 2.5 lightx2v/utils    quant_utils.py + registry_factory.py + utils.py    #######################################################################################
 from lightx2v.text2v.models.schedulers.hunyuan.scheduler import HunyuanScheduler
 from lightx2v.text2v.models.schedulers.hunyuan.feature_caching.scheduler import HunyuanSchedulerFeatureCaching
 from lightx2v.text2v.models.schedulers.wan.scheduler import WanScheduler
 from lightx2v.text2v.models.schedulers.wan.feature_caching.scheduler import WanSchedulerFeatureCaching
+
+from lightx2v.text2v.models.text_encoders.hf.llama.model import TextEncoderHFLlamaModel
+from lightx2v.text2v.models.text_encoders.hf.clip.model import TextEncoderHFClipModel
+from lightx2v.text2v.models.text_encoders.hf.t5.model import T5EncoderModel
 
 from lightx2v.text2v.models.networks.hunyuan.model import HunyuanModel
 from lightx2v.text2v.models.networks.wan.model import WanModel
 
 from lightx2v.text2v.models.video_encoders.hf.autoencoder_kl_causal_3d.model import VideoEncoderKLCausal3DModel
 from lightx2v.text2v.models.video_encoders.hf.wan.vae import WanVAE
+
+########## 2.5 lightx2v/utils    quant_utils.py + registry_factory.py + utils.py    #######################################################################################
 from lightx2v.utils.utils import save_videos_grid, seed_all, cache_video
-from lightx2v.common.ops import *
-from lightx2v.image2v.models.wan.model import CLIPModel
 
 
+# 2. 加载模型
+# 2.1 根据args, model_config加载模型
+# 2.2 得到了model, text_encoders
+# 2.3 得到了vae_model, image_encoder, 暂未涉及
 def load_models(args, model_config):
+    ############################## 2.1 无关 ##############################
     if model_config['parallel_attn']:
         cur_rank = dist.get_rank()  # 获取当前进程的 rank
         torch.cuda.set_device(cur_rank)  # 设置当前进程的 CUDA 设备
     image_encoder = None
+
+    ########################### 2.2 模型是加载到CPU上 ###########################
     if args.cpu_offload:
         init_device = torch.device("cpu")
     else:
         init_device = torch.device("cuda")
 
+    ############################## 2.3 根据模型选择 ##############################
+    # 2.3.1 根据模型选择加载model, text_encoder
+    # 2.3.2 根据模型选择加载vae_model, image_encoder, 暂未涉及
+
+    # 2.3.3 hunyuan
     if args.model_cls == "hunyuan":
+        # 2.3.3.1 根据args.model_path, cpu-offload来加载clip和llama
         text_encoder_1 = TextEncoderHFLlamaModel(os.path.join(args.model_path, "text_encoder"), init_device)
         text_encoder_2 = TextEncoderHFClipModel(os.path.join(args.model_path, "text_encoder_2"), init_device)
         text_encoders = [text_encoder_1, text_encoder_2]
+
+        # 2.3.3.2 根据args.model_path, model_config来加载模型
         model = HunyuanModel(args.model_path, model_config)
+
+        # 2.3.3.2 暂未涉及
         vae_model = VideoEncoderKLCausal3DModel(args.model_path, dtype=torch.float16, device=init_device)
 
+    # 2.3.4 wan
     elif args.model_cls == "wan2.1":
+        # 2.3.4.1 根据args.model_path, model_config来加载t5
         text_encoder = T5EncoderModel(
             text_len=model_config["text_len"],
             dtype=torch.bfloat16,
@@ -54,7 +85,11 @@ def load_models(args, model_config):
             shard_fn=None,
         )
         text_encoders = [text_encoder]
+
+        # 2.3.4.2 根据args.model_path, model_config来加载模型
         model = WanModel(args.model_path, model_config)
+
+        # 2.3.4.3 暂未涉及
         vae_model = WanVAE(vae_pth=os.path.join(args.model_path, "Wan2.1_VAE.pth"), device=init_device, parallel=args.parallel_vae)
         if args.task == 'i2v':
             image_encoder = CLIPModel(
@@ -63,9 +98,14 @@ def load_models(args, model_config):
                 checkpoint_path=os.path.join(args.model_path,
                                             "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"),
                 tokenizer_path=os.path.join(args.model_path, "xlm-roberta-large"))
+    
+    # 2.3.5 其他模型
     else:
         raise NotImplementedError(f"Unsupported model class: {args.model_cls}")
 
+    ################################# 2.4 返回 #################################
+    # 2.4.1 返回model, text_encoder
+    # 2.4.2 返回vae_model, image_encoder, 暂未涉及
     return model, text_encoders, vae_model, image_encoder
 
 
@@ -96,6 +136,8 @@ def set_target_shape(args):
             )
 
 
+# 3. image_encoder
+# 3.1 暂未涉及
 def run_image_encoder(args, image_encoder, vae_model):
     if args.model_cls == "hunyuan":
         return None
@@ -142,14 +184,27 @@ def run_image_encoder(args, image_encoder, vae_model):
         raise NotImplementedError(f"Unsupported model class: {model_cls}")
 
 
+# 4. 执行text_encoder
+# 4.1 根据args, prompt, model_config; text_encoders
+# 4.2 得到文本编码输出
 def run_text_encoder(args, text, text_encoders, model_config):
+    # 4.1 输出，是一个字典
     text_encoder_output = {}
+
+    # 4.2 选择模型
+    # 4.2.1 hunyuan
+    # 4.2.2 对于hunyuan有clip和llama两个text_encoder
+    # 4.2.2 输出是{"text_encoder_1_text_status":..., "text_encoder_1_text_status":...}，对应clip
+    # 4.2.2 输出是{"text_encoder_2_text_status":..., "text_encoder_2_text_status":...}，对应llama
     if args.model_cls == "hunyuan":
         for i, encoder in enumerate(text_encoders):
             text_state, attention_mask = encoder.infer(text, args)
             text_encoder_output[f"text_encoder_{i+1}_text_states"] = text_state.to(dtype=torch.bfloat16)
             text_encoder_output[f"text_encoder_{i+1}_attention_mask"] = attention_mask
 
+    # 4.2.2 wan
+    # 4.2.2 对于wan有t5一个text_encoder
+    # 4.2.2 输出是{"context":..., "context_null":...}，前者是prompt，后者是sample_neg_prompt
     elif args.model_cls == "wan2.1":
         n_prompt = model_config.get("sample_neg_prompt", "")
         context = text_encoders[0].infer([text], args)
@@ -157,9 +212,11 @@ def run_text_encoder(args, text, text_encoders, model_config):
         text_encoder_output["context"] = context
         text_encoder_output["context_null"] = context_null
 
+    # 4.2.3 其他模型
     else:
         raise NotImplementedError(f"Unsupported model type: {args.model_cls}")
 
+    # 4.3 返回
     return text_encoder_output
 
 
@@ -218,42 +275,54 @@ def run_vae(latents, generator, args):
     return images
 
 
+# 1. 主代码
 if __name__ == "__main__":
+    ###################################################################### 1.1 解析参数 ######################################################################
+    # 1.1.1 解析通用参数: model_path, model_cls, prompt; infer_steps, target_video_length, target_width, target_height; attention_type, save_video_path
+    # 1.1.2 解析hunyuan参数: cpu_offload, feature_caching		
+    # 1.1.3 解析wan参数: task, seed, sample_neg_prompt, sample_guide_scale, sample_shift, config_path
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_cls", type=str, required=True, choices=["wan2.1", "hunyuan"], default="hunyuan")
-    parser.add_argument("--task", type=str, choices=["t2v", "i2v"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--config_path", type=str, default=None)
-    parser.add_argument("--image_path", type=str, default=None)
-    parser.add_argument('--save_video_path', type=str, default='./output_ligthx2v.mp4')
+    parser.add_argument("--model_cls", type=str, required=True, choices=["wan2.1", "hunyuan"], default="hunyuan")
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--infer_steps", type=int, required=True)
     parser.add_argument("--target_video_length", type=int, required=True)
     parser.add_argument("--target_width", type=int, required=True)
     parser.add_argument("--target_height", type=int, required=True)
     parser.add_argument("--attention_type", type=str, required=True)
+    parser.add_argument('--save_video_path', type=str, default='./output_ligthx2v.mp4')
+
+    parser.add_argument('--cpu_offload', action='store_true')
+    parser.add_argument('--feature_caching', choices=["NoCaching", "TaylorSeer", "Tea"], default="NoCaching")
+
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v"], default="t2v")
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument("--sample_neg_prompt", type=str, default="")
     parser.add_argument("--sample_guide_scale", type=float, default=5.0)
     parser.add_argument("--sample_shift", type=float, default=5.0)
-    parser.add_argument('--do_mm_calib', action='store_true')
-    parser.add_argument('--cpu_offload', action='store_true')
-    parser.add_argument('--feature_caching', choices=["NoCaching", "TaylorSeer", "Tea"], default="NoCaching")
+    parser.add_argument("--config_path", type=str, default=None)
+    
+    # 1.1.4 解析暂未涉及到的参数
     parser.add_argument('--mm_config', default=None)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--vae_stride', default=(4, 8, 8))
+    parser.add_argument('--patch_size', default=(1, 2, 2))
+    parser.add_argument('--do_mm_calib', action='store_true')
     parser.add_argument('--parallel_attn', action='store_true')
     parser.add_argument('--parallel_vae', action='store_true')
     parser.add_argument('--max_area', action='store_true')
-    parser.add_argument('--vae_stride', default=(4, 8, 8))
-    parser.add_argument('--patch_size', default=(1, 2, 2))
     parser.add_argument("--teacache_thresh", type=float, default=0.26)
+    parser.add_argument("--image_path", type=str, default=None)
     parser.add_argument("--use_ret_steps", action="store_true", default=False)
+
+    # 1.1.5 存储在变量args中
     args = parser.parse_args()
 
+    ############################################################ 1.2 开一下时间戳 + 打印参数 + 设定随机数 ############################################################
     start_time = time.time()
     print(f"args: {args}")
-    
     seed_all(args.seed)
 
+    ######################################################################### 1.3 无关 #########################################################################
     if args.parallel_attn:
         dist.init_process_group(backend='nccl')
 
@@ -262,34 +331,54 @@ if __name__ == "__main__":
     else:
         mm_config = None
 
+    ###################################################################### 1.4 模型配置 ######################################################################
+    # 1.6.1 从命令行读入的配置
     model_config = {
-        "task": args.task,
+        # 1.1 通用
         "attention_type": args.attention_type,
-        "sample_neg_prompt": args.sample_neg_prompt,
-        "mm_config": mm_config,
-        "do_mm_calib": args.do_mm_calib,
+
+        # 1.2 hunyuan
         "cpu_offload": args.cpu_offload,
         "feature_caching": args.feature_caching,
+
+        # 1.3 wan
+        "task": args.task,
+        "sample_neg_prompt": args.sample_neg_prompt,
+
+        # 1.4 暂未涉及
+        "mm_config": mm_config,
+        "do_mm_calib": args.do_mm_calib,
         "parallel_attn": args.parallel_attn,
         "parallel_vae": args.parallel_vae
     }
 
+    # 1.6.2 wan模型还有一些其他模型配置
     if args.config_path is not None:
         with open(args.config_path, "r") as f:
             config = json.load(f)
         model_config.update(config)
 
+    # 1.6.3 打印模型配置
     print(f"model_config: {model_config}")
 
+    ############################################################ 1.5 根据args, model_config加载模型 ############################################################
+    # 1.5.1 得到了model
+    # 1.5.2 得到了text_encoders
+    # 1.5.3 得到了vae_model, image_encoder, 暂未涉及
     model, text_encoders, vae_model, image_encoder = load_models(args, model_config)
 
+    ###################################################################### 1.6 无关 ######################################################################
     if args.task in ['i2v']:
         image_encoder_output = run_image_encoder(args, image_encoder, vae_model)
     else:
         image_encoder_output = {"clip_encoder_out": None, "vae_encode_out": None}
 
+    ################################################################### 1.7 text_encoder ###################################################################
+    # 1.7.1 根据args, prompt, model_config; text_encoders
+    # 1.7.2 得到文本编码输出
     text_encoder_output = run_text_encoder(args, args.prompt, text_encoders, model_config)
 
+    ##################################################################### 1.8 network #####################################################################
     set_target_shape(args)
     scheduler = init_scheduler(args)
 
@@ -308,13 +397,16 @@ if __name__ == "__main__":
         gc.collect()
         torch.cuda.empty_cache()
 
+    ############################################################### 1.9 video_encoder ###############################################################
     images = run_vae(latents, generator, args)
 
+    ############################################################ 1.10 根据模型类型保存视频 ############################################################
     if not args.parallel_attn or (args.parallel_attn and dist.get_rank() == 0):
         if args.model_cls == "wan2.1":
             cache_video(tensor=images, save_file=args.save_video_path, fps=16, nrow=1, normalize=True, value_range=(-1, 1))
         else:
             save_videos_grid(images, args.save_video_path, fps=24)
 
+    ############################################################ 1.11 打印总耗时 ############################################################
     end_time = time.time()
     print(f"Total time: {end_time - start_time}")

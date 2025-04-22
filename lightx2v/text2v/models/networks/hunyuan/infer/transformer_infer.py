@@ -5,6 +5,7 @@ from .utils_bf16 import apply_rotary_emb
 
 
 class HunyuanTransformerInfer():
+    # 1. 加载模型
     def __init__(self, config):
         self.config = config
         self.attention_type = config.get("attention_type", "flash_attn2")
@@ -15,6 +16,7 @@ class HunyuanTransformerInfer():
         self.mlp_hidden_dim = 12288
         self.parallel_attention = None
 
+    # 2. 推断
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 

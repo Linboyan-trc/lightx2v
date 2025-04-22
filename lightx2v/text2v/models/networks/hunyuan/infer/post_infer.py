@@ -2,9 +2,11 @@ import torch
 
 
 class HunyuanPostInfer():
+    # 1. 加载模型
     def __init__(self):
         pass
 
+    # 2. 推断
     def infer(self, weights, img, vec, shape):
         out = torch.nn.functional.silu(vec)
         out = weights.final_layer_adaLN_modulation_1.apply(out)
