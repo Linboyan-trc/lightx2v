@@ -8,10 +8,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# use tsinghua source
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list \
-    && sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list
-
 RUN apt-get update && apt install -y software-properties-common  \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update \
@@ -24,10 +20,9 @@ RUN apt-get update && apt install -y software-properties-common  \
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 
-RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
-    && pip install packaging ninja vllm torch torchvision diffusers transformers==4.45.2 \
-     tokenizers accelerate safetensors opencv-python numpy imageio imageio-ffmpeg \
-     einops loguru sgl-kernel qtorch ftfy easydict
+RUN pip install packaging ninja vllm torch torchvision diffusers transformers==4.45.2 \
+    tokenizers accelerate safetensors opencv-python numpy imageio imageio-ffmpeg \
+    einops loguru sgl-kernel qtorch ftfy easydict
 
 # install flash-attention 2
 RUN cd lightx2v/3rd/flash-attention && pip install --no-cache-dir -v -e .
