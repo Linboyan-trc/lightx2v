@@ -2,7 +2,8 @@ import json
 import os
 from easydict import EasyDict
 
-
+########################################################################################################################
+# 1. 获取默认属性
 def get_default_config():
     default_config = {
         "do_mm_calib": False,
@@ -22,7 +23,8 @@ def get_default_config():
     }
     return default_config
 
-
+########################################################################################################################
+# 1. 所有的属性都会被设置为一级属性，通过config.xxx取出
 def set_config(args):
     config = get_default_config()
     config.update({k: v for k, v in vars(args).items()})

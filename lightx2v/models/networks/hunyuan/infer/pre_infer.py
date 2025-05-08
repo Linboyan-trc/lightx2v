@@ -4,43 +4,66 @@ from einops import rearrange
 from lightx2v.attentions import attention
 
 
+####################################################################################################
 class HunyuanPreInfer:
+    ############################## 1. 初始化 ##############################
     def __init__(self, config):
-        self.heads_num = 24
         self.config = config
+        self.heads_num = 24
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    ############################## 2. 推理 ##############################
+    # 2.1 推理
+    # 2.1.1 weights是一个PreWeight权重实例，具有weight_list属性，是一系列算子，每个算子有weight属性和bias属性
+    # 2.1.2 inputs是从顶层HunyuanRunner的run_pipeline(), run()传入，是一个字典
+    # 2.1.2 inputs["image_encoder_output"]["img"], ["img_latents"]
+    # 2.1.2 inputs["text_encoder_output"]["text_encoder_1_text_states"], ["text_encoder_1_attention_mask"], ["text_encoder_2_text_states"], ["text_encoder_2_attention_mask"]
     def infer(self, weights, inputs):
+        # 2.1 获取scheduler的多维张量latents
         x = self.scheduler.latents
+
+        # 2.2 根据推理步数下标获取scheduler的timesteps属性中的元素，是一个1*1的张量
+        # 2.2 timesteps是sigmas去掉一个后放大1000倍，元素个数和推理步数一致
         t = self.scheduler.timesteps[self.scheduler.step_index]
+
+        # 2.3 获取scheduler的freqs_cos, freqs_sin, 均为多维张量
+        # 2.3 获取scheduler的guidance，为1*1张量
         freqs_cos = self.scheduler.freqs_cos
         freqs_sin = self.scheduler.freqs_sin
         guidance = self.scheduler.guidance
 
+        # 2.4 获取文本的states_1, mask_1, states_2
         text_states = inputs["text_encoder_output"]["text_encoder_1_text_states"]
         text_mask = inputs["text_encoder_output"]["text_encoder_1_attention_mask"]
         text_states_2 = inputs["text_encoder_output"]["text_encoder_2_text_states"]
 
+        # 2.5 图片任务
         if self.config["task"] == "i2v":
+            # 2.5.1 得到一个1*1的0张量
             token_replace_t = torch.zeros_like(t)
             token_replace_vec = self.infer_time_in(weights, token_replace_t)
             th = x.shape[-2] // 2
             tw = x.shape[-1] // 2
             frist_frame_token_num = th * tw
 
-        time_out = self.infer_time_in(weights, t)
+        # 2.6 一开始用随机的latents转化成第一次的视频输出
+        # 2.6.1 具体就是对latents做一个3D卷积，得到一个五维张量，并且展开成三维
         img_out = self.infer_img_in(weights, x)
-        infer_text_out = self.infer_text_in(weights, text_states, text_mask, t)
+
+        time_out = self.infer_time_in(weights, t)
+
         infer_vector_out = self.infer_vector_in(weights, text_states_2)
-        vec = time_out + infer_vector_out
+
+        guidance_out = self.infer_guidance_in(weights, guidance)
+
+        vec = time_out + infer_vector_out + guidance_out
+
+        infer_text_out = self.infer_text_in(weights, text_states, text_mask, t)
 
         if self.config["task"] == "i2v":
             token_replace_vec = token_replace_vec + infer_vector_out
-
-        guidance_out = self.infer_guidance_in(weights, guidance)
-        vec = vec + guidance_out
 
         txt_seq_len = infer_text_out.shape[0]
         img_seq_len = img_out.shape[1]

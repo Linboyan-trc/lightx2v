@@ -6,26 +6,42 @@ from lightx2v.common.offload.manager import WeightStreamManager
 from lightx2v.utils.envs import *
 
 
+############################################################################################################################################
+# 1. TransformerInfer
+# 1.1 不使用feature_caching
 class HunyuanTransformerInfer:
+    ################################################## 1. 初始化 ##################################################
+    # 1.1 初始化
     def __init__(self, config):
+        # 1.1 属性: config, attention_type
         self.config = config
         self.attention_type = config.get("attention_type", "flash_attn2")
+
+        # 1.2 属性: double_blocks_num, single_blocks_num, heads_num
+        # 1.2.1 属性: hidden_size, mlp_hidden_dim
         self.double_blocks_num = 20
         self.single_blocks_num = 40
         self.heads_num = 24
         self.hidden_size = 3072
         self.mlp_hidden_dim = 12288
+
+        # 1.3 多卡并行
         self.parallel_attention = None
+
+        # 1.4 使用CPU推理
         if self.config["cpu_offload"]:
             self.double_weights_stream_mgr = WeightStreamManager()
             self.single_weights_stream_mgr = WeightStreamManager()
             self.infer_func = self._infer_with_offload
+        
+        # 1.5 不使用CPU推理
         else:
             self.infer_func = self._infer_without_offload
 
     def set_scheduler(self, scheduler):
         self.scheduler = scheduler
 
+    #############################################################################################################
     @torch.compile(disable=not CHECK_ENABLE_GRAPH_MODE())
     def infer(self, weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec=None, frist_frame_token_num=None):
         return self.infer_func(weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num)
@@ -68,21 +84,30 @@ class HunyuanTransformerInfer:
         return img, vec
 
     def _infer_without_offload(self, weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num):
+        # 得到256
         txt_seq_len = txt.shape[0]
+
+        # 得到32400
         img_seq_len = img.shape[0]
 
+        # 20个
+        # 分别处理latents和prompt
         for i in range(self.double_blocks_num):
             img, txt = self.infer_double_block(weights.double_blocks_weights[i], img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num)
-
+        
         x = torch.cat((img, txt), 0)
 
+        # 40个
+        # 合并
         for i in range(self.single_blocks_num):
             x = self.infer_single_block(weights.single_blocks_weights[i], x, vec, txt_seq_len, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num)
 
         img = x[:img_seq_len, ...]
+
         return img, vec
 
     def infer_double_block(self, weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num):
+        # vec形状仍为[1, 3072]，对每个元素更新
         vec_silu = torch.nn.functional.silu(vec)
 
         img_mod_out = weights.img_mod.apply(vec_silu)

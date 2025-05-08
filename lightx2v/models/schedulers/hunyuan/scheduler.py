@@ -172,11 +172,22 @@ def get_nd_rotary_pos_embed(
         return emb
 
 
+# 2.1 设置timesteps和sigmas
 def set_timesteps_sigmas(num_inference_steps, shift, device, num_train_timesteps=1000):
+    # 1. 一维tensor，起始1，结束0，元素个数infer_steps + 1 = 21
+    # 1.1 图像是y=ax + b形式，倾斜的直线
     sigmas = torch.linspace(1, 0, num_inference_steps + 1)
+
+    # 1.2 对sigmas中每个元素做y = shift*x 除以 1+(shift-1)*x的变换
+    # 1.2.1 shift大的话，sigmas后面的元素接近0，变换后衰减的更快
     sigmas = (shift * sigmas) / (1 + (shift - 1) * sigmas)
+
+    # 1.3 timesteps比sigmas少一个元素
+    # 1.3.1 对sigmas每个元素乘1000，然后转换成float32
     timesteps = (sigmas[:-1] * num_train_timesteps).to(dtype=torch.float32, device=device)
-    return timesteps, sigmas
+
+    # 1.4 返回sigmas, timesteps
+    return sigmas, timesteps
 
 
 def get_1d_rotary_pos_embed_riflex(
@@ -234,47 +245,60 @@ def get_1d_rotary_pos_embed_riflex(
         return freqs_cis
 
 
+####################################################################################################
+# 1.1 调度器
+# 1.1 继承父类BaseScheduler
 class HunyuanScheduler(BaseScheduler):
+    ############################## 1. 初始化 ##############################
+    # 1. 初始化
     def __init__(self, config):
+        # 1. 初始化，属性: config, step_index, latents
         super().__init__(config)
+
+        # 2. 初始化，属性: infer_steps, shift, timesteps, sigmas
         self.infer_steps = self.config.infer_steps
         self.shift = 7.0
-        self.timesteps, self.sigmas = set_timesteps_sigmas(self.infer_steps, self.shift, device=torch.device("cuda"))
+        self.sigmas, self.timesteps = set_timesteps_sigmas(self.infer_steps, self.shift, device=torch.device("cuda"))
         assert len(self.timesteps) == self.infer_steps
+
+        # 3. 初始化，属性: embedded_guidance_scale, generator, noise_pred
         self.embedded_guidance_scale = 6.0
         self.generator = [torch.Generator("cuda").manual_seed(seed) for seed in [self.config.seed]]
         self.noise_pred = None
 
+    ######################################################################
+    # 2. network层
+    # 2.1 首先准备调度器
     def prepare(self, image_encoder_output):
+        # 2.1 设置scheduler.image_encoder_output为图像编码层输出
         self.image_encoder_output = image_encoder_output
+
+        # 2.2 设置调度器的latents
+        # 2.2.1 根据视频目标性状，float16类型，图像编码层输出/None来设置
+        # 2.2.2 latents的形状就是[1, 16, 帧数//4，高度//8，宽度//8]，1是指只生成1个视频，16叫做通道数
         self.prepare_latents(shape=self.config.target_shape, dtype=torch.float16, image_encoder_output=image_encoder_output)
+        
+        # 2.3 设置调度器的guidance
         self.prepare_guidance()
+
+        # 2.4 设置调度器的freqs_cos, freqs_sin
         self.prepare_rotary_pos_embedding(video_length=self.config.target_video_length, height=self.config.target_height, width=self.config.target_width)
 
-    def prepare_guidance(self):
-        self.guidance = torch.tensor([self.embedded_guidance_scale], dtype=torch.bfloat16, device=torch.device("cuda")) * 1000.0
-
-    def step_post(self):
-        if self.config.task == "t2v":
-            sample = self.latents.to(torch.float32)
-            dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
-            self.latents = sample + self.noise_pred.to(torch.float32) * dt
-        else:
-            sample = self.latents[:, :, 1:, :, :].to(torch.float32)
-            dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
-            latents = sample + self.noise_pred[:, :, 1:, :, :].to(torch.float32) * dt
-            self.latents = torch.concat([self.image_encoder_output["img_latents"], latents], dim=2)
-
+    # 2.2 设置调度器的latents
+    # 2.2.1 根据视频目标性状，float16类型，图像编码层输出/None来设置
     def prepare_latents(self, shape, dtype, image_encoder_output):
-        if self.config.task == "t2v":
-            self.latents = randn_tensor(shape, generator=self.generator, device=torch.device("cuda"), dtype=dtype)
-        else:
+        if self.config.task == "i2v":
             x1 = image_encoder_output["img_latents"].repeat(1, 1, (self.config.target_video_length - 1) // 4 + 1, 1, 1)
             x0 = randn_tensor(shape, generator=self.generator, device=torch.device("cuda"), dtype=dtype)
             t = torch.tensor([0.999]).to(device=torch.device("cuda"))
             self.latents = x0 * t + x1 * (1 - t)
             self.latents = self.latents.to(dtype=dtype)
             self.latents = torch.concat([image_encoder_output["img_latents"], self.latents[:, :, 1:, :, :]], dim=2)
+        else:
+            self.latents = randn_tensor(shape, generator=self.generator, device=torch.device("cuda"), dtype=dtype)
+
+    def prepare_guidance(self):
+        self.guidance = torch.tensor([self.embedded_guidance_scale], dtype=torch.bfloat16, device=torch.device("cuda")) * 1000.0
 
     def prepare_rotary_pos_embedding(self, video_length, height, width):
         target_ndim = 3
@@ -361,3 +385,29 @@ class HunyuanScheduler(BaseScheduler):
 
             self.freqs_cos = freqs_cos.to(dtype=torch.bfloat16, device=torch.device("cuda"))
             self.freqs_sin = freqs_sin.to(dtype=torch.bfloat16, device=torch.device("cuda"))
+
+    ######################################################################
+    # 3. post计算
+    def step_post(self):
+        # 3.1 图像任务
+        if self.config.task == "i2v":
+            # 3.1.1 调整latents形状，赋值给sample
+            sample = self.latents[:, :, 1:, :, :].to(torch.float32)
+
+            # 3.1.2 dt是一个1*1的张量
+            dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
+
+            # 3.1.3 重新复制latents，为五维张量
+            latents = sample + self.noise_pred[:, :, 1:, :, :].to(torch.float32) * dt
+
+            # 3.1.4 拼接张量，最后赋值给scheduler.latents，完成一次更新
+            self.latents = torch.concat([self.image_encoder_output["img_latents"], latents], dim=2)
+
+        # 3.2 文本任务
+        else:
+            # 3.2.1 更新scheduler.latents，完成一次更新
+            sample = self.latents.to(torch.float32)
+            dt = self.sigmas[self.step_index + 1] - self.sigmas[self.step_index]
+            self.latents = sample + self.noise_pred.to(torch.float32) * dt
+
+            
