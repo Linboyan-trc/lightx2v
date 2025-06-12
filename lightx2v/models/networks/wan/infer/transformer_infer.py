@@ -2,7 +2,7 @@ from lightx2v.common.transformer_infer.transformer_infer import BaseTransformerI
 import torch
 import numpy as np
 from .utils import compute_freqs, compute_freqs_dist, apply_rotary_emb
-from lightx2v.common.offload.manager import WeightAsyncStreamManager
+from lightx2v.common.offload.manager import WeightAsyncStreamManager, LazyWeightAsyncStreamManager
 from lightx2v.utils.envs import *
 
 
@@ -24,8 +24,29 @@ class BaseWanTransformerInfer(BaseTransformerInfer):
         self.infer_conditional = True
 
         if self.config["cpu_offload"]:
+            if "offload_ratio" in self.config:
+                offload_ratio = self.config["offload_ratio"]
+            else:
+                offload_ratio = 1
+
             self.offload_granularity = self.config.get("offload_granularity", "block")
-            self.weights_stream_mgr = WeightAsyncStreamManager()
+            if self.config.get("lazy_load", False):
+                self.offload_granularity = "phase_lazy"
+
+            if not self.config.get("lazy_load", False):
+                self.weights_stream_mgr = WeightAsyncStreamManager(
+                    blocks_num=self.blocks_num,
+                    offload_ratio=offload_ratio,
+                    phases_num=self.phases_num,
+                )
+            else:
+                self.weights_stream_mgr = LazyWeightAsyncStreamManager(
+                    blocks_num=self.blocks_num,
+                    offload_ratio=offload_ratio,
+                    phases_num=self.phases_num,
+                    num_disk_workers=self.config.get("num_disk_workers", 2),
+                    max_memory=self.config.get("max_memory", 2),
+                )
 
     # per block
     def infer_block_1(self, weights, grid_sizes, x, embed0, seq_lens, freqs, context, shift_msa, scale_msa):
@@ -305,8 +326,10 @@ class WanTransformerInfer(BaseWanTransformerInfer):
         else:
             if self.offload_granularity == "block":
                 return self._infer_calculating_block_offload(weights, grid_sizes, x, embed0, seq_lens, freqs, context)
-            else:
+            elif self.offload_granularity == "phase":
                 return self._infer_calculating_phase_offload(weights, grid_sizes, x, embed0, seq_lens, freqs, context)
+            else:
+                return self._infer_calculating_phase_lazy_offload(weights, grid_sizes, x, embed0, seq_lens, freqs, context)
 
     def _infer_calculating(self, weights, grid_sizes, x, embed0, seq_lens, freqs, context):
         for block_idx in range(self.blocks_num):
@@ -329,6 +352,9 @@ class WanTransformerInfer(BaseWanTransformerInfer):
                 self.weights_stream_mgr.active_weights[0] = weights.blocks[0]
                 self.weights_stream_mgr.active_weights[0].to_cuda()
 
+            if block_idx < self.blocks_num - 1:
+                self.weights_stream_mgr.prefetch_weights(block_idx + 1, weights.blocks)
+
             with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
                 if embed0.dim() == 3:
                     modulation = self.weights_stream_mgr.active_weights[0].modulation.tensor.unsqueeze(2)
@@ -342,8 +368,6 @@ class WanTransformerInfer(BaseWanTransformerInfer):
                 y_out = super().infer_block_3(self.weights_stream_mgr.active_weights[0].compute_phases[2], grid_sizes, x, embed0, seq_lens, freqs, context, attn_out, c_shift_msa, c_scale_msa)
                 x = super().infer_block_4(None, grid_sizes, x, embed0, seq_lens, freqs, context, y_out, c_gate_msa)
 
-            if block_idx < self.blocks_num - 1:
-                self.weights_stream_mgr.prefetch_weights(block_idx + 1, weights.blocks)
             self.weights_stream_mgr.swap_weights()
 
         return x
@@ -359,6 +383,8 @@ class WanTransformerInfer(BaseWanTransformerInfer):
             elif embed0.dim() == 2:
                 shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (weights.blocks[block_idx].modulation.tensor + embed0).chunk(6, dim=1)
 
+            y_out = None
+            attn_out = None
             for phase_idx in range(3):
                 if block_idx == 0 and phase_idx == 0:
                     phase = weights.blocks[block_idx].compute_phases[phase_idx]
@@ -384,6 +410,60 @@ class WanTransformerInfer(BaseWanTransformerInfer):
                 self.weights_stream_mgr.swap_phases()
 
             weights.blocks[block_idx].modulation.to_cpu()
+
+        torch.cuda.empty_cache()
+
+        return x
+
+    def _infer_calculating_phase_lazy_offload(self, weights, grid_sizes, x, embed0, seq_lens, freqs, context):
+        self.weights_stream_mgr.prefetch_weights_from_disk(weights)
+
+        for block_idx in range(self.blocks_num):
+            with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
+                weights.blocks[block_idx].modulation.to_cuda()
+
+            if embed0.dim() == 3:
+                modulation = weights.blocks[block_idx].modulation.tensor.unsqueeze(2)
+                current_embed0 = (modulation + embed0).chunk(6, dim=1)
+                shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = [ei.squeeze(1) for ei in current_embed0]
+            elif embed0.dim() == 2:
+                shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (weights.blocks[block_idx].modulation.tensor + embed0).chunk(6, dim=1)
+
+            y_out = None
+            attn_out = None
+            for phase_idx in range(self.weights_stream_mgr.phases_num):
+                if block_idx == 0 and phase_idx == 0:
+                    obj_key = (block_idx, phase_idx)
+                    phase = self.weights_stream_mgr.pin_memory_buffer.get(obj_key)
+                    phase.to_cuda()
+                    self.weights_stream_mgr.active_weights[0] = (obj_key, phase)
+
+                with torch.cuda.stream(self.weights_stream_mgr.compute_stream):
+                    (
+                        (
+                            _,
+                            cur_phase_idx,
+                        ),
+                        cur_phase,
+                    ) = self.weights_stream_mgr.active_weights[0]
+
+                    if cur_phase_idx == 0:
+                        y_out = super().infer_block_1(cur_phase, grid_sizes, x, embed0, seq_lens, freqs, context, shift_msa, scale_msa)
+                    elif cur_phase_idx == 1:
+                        attn_out = super().infer_block_2(cur_phase, grid_sizes, x, embed0, seq_lens, freqs, context, y_out, gate_msa)
+                    elif cur_phase_idx == 2:
+                        y_out = super().infer_block_3(cur_phase, grid_sizes, x, embed0, seq_lens, freqs, context, attn_out, c_shift_msa, c_scale_msa)
+                        x = super().infer_block_4(cur_phase, grid_sizes, x, embed0, seq_lens, freqs, context, y_out, c_gate_msa)
+
+                if not (block_idx == weights.blocks_num - 1 and phase_idx == self.phases_num - 1):
+                    next_block_idx = block_idx + 1 if phase_idx == self.phases_num - 1 else block_idx
+                    next_phase_idx = (phase_idx + 1) % self.weights_stream_mgr.phases_num
+                    self.weights_stream_mgr.prefetch_phase(next_block_idx, next_phase_idx, weights.blocks)
+
+                self.weights_stream_mgr.swap_phases()
+
+            weights.blocks[block_idx].modulation.to_cpu()
+            self.weights_stream_mgr._async_prefetch_block(weights)
 
         torch.cuda.empty_cache()
 

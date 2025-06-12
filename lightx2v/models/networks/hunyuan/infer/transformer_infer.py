@@ -18,8 +18,12 @@ class BaseHunyuanTransformerInfer(BaseTransformerInfer):
         self.mlp_hidden_dim = 12288
         self.parallel_attention = None
         if self.config["cpu_offload"]:
-            self.double_weights_stream_mgr = WeightAsyncStreamManager()
-            self.single_weights_stream_mgr = WeightAsyncStreamManager()
+            if "offload_ratio" in self.config:
+                offload_ratio = self.config["offload_ratio"]
+            else:
+                offload_ratio = 1
+            self.double_weights_stream_mgr = WeightAsyncStreamManager(blocks_num=self.double_blocks_num, offload_ratio=offload_ratio)
+            self.single_weights_stream_mgr = WeightAsyncStreamManager(blocks_num=self.single_blocks_num, offload_ratio=offload_ratio)
 
     # per double block
     def infer_double_block_1(self, weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num):
