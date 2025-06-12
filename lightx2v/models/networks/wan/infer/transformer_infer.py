@@ -15,6 +15,7 @@ class BaseWanTransformerInfer(BaseTransformerInfer):
 
         # 1.2 blocks_num:30, head_num, in_dim, window_size
         self.blocks_num = config["num_layers"]
+        self.phases_num = 3
         self.num_heads = config["num_heads"]
         self.head_dim = config["dim"] // config["num_heads"]
         self.window_size = config.get("window_size", (-1, -1))

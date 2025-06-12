@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 from einops import rearrange
-from lightx2v.utils.memory_profiler import peak_memory_decorator
 from loguru import logger
 
 __all__ = [
@@ -788,7 +787,6 @@ def _video_vae(pretrained_path=None, z_dim=None, device="cpu", **kwargs):
 
 
 class WanVAE:
-    @peak_memory_decorator
     def __init__(
         self,
         z_dim=16,
@@ -926,7 +924,7 @@ class WanVAE:
 
         torch.cuda.synchronize()
 
-        images = torch.cat(full_images, dim=-1)
+        images = torch.cat(full_images, dim=split_dim + 1)
 
         return images
 

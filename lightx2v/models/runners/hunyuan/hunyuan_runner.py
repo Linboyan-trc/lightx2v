@@ -12,7 +12,7 @@ from lightx2v.models.input_encoders.hf.clip.model import TextEncoderHFClipModel
 from lightx2v.models.input_encoders.hf.llava.model import TextEncoderHFLlavaModel
 from lightx2v.models.networks.hunyuan.model import HunyuanModel
 from lightx2v.models.video_encoders.hf.autoencoder_kl_causal_3d.model import VideoEncoderKLCausal3DModel
-import torch.distributed as dist
+from lightx2v.utils.utils import save_videos_grid
 from lightx2v.utils.profiler import ProfilingContext
 
 
@@ -21,26 +21,24 @@ class HunyuanRunner(DefaultRunner):
     def __init__(self, config):
         super().__init__(config)
 
-    @ProfilingContext("Load models")
-    def load_model(self):
-        if self.config["parallel_attn_type"]:
-            cur_rank = dist.get_rank()
-            torch.cuda.set_device(cur_rank)
-        image_encoder = None
-        if self.config.cpu_offload:
-            init_device = torch.device("cpu")
-        else:
-            init_device = torch.device("cuda")
+    def load_transformer(self):
+        return HunyuanModel(self.config.model_path, self.config, self.init_device, self.config)
 
+    def load_image_encoder(self):
+        return None
+
+    def load_text_encoder(self):
         if self.config.task == "t2v":
-            text_encoder_1 = TextEncoderHFLlamaModel(os.path.join(self.config.model_path, "text_encoder"), init_device)
+            text_encoder_1 = TextEncoderHFLlamaModel(os.path.join(self.config.model_path, "text_encoder"), self.init_device)
         else:
-            text_encoder_1 = TextEncoderHFLlavaModel(os.path.join(self.config.model_path, "text_encoder_i2v"), init_device)
-        text_encoder_2 = TextEncoderHFClipModel(os.path.join(self.config.model_path, "text_encoder_2"), init_device)
+            text_encoder_1 = TextEncoderHFLlavaModel(os.path.join(self.config.model_path, "text_encoder_i2v"), self.init_device)
+        text_encoder_2 = TextEncoderHFClipModel(os.path.join(self.config.model_path, "text_encoder_2"), self.init_device)
         text_encoders = [text_encoder_1, text_encoder_2]
-        model = HunyuanModel(self.config.model_path, self.config, init_device, self.config)
-        vae_model = VideoEncoderKLCausal3DModel(self.config.model_path, dtype=torch.float16, device=init_device, config=self.config)
-        return model, text_encoders, vae_model, image_encoder
+        return text_encoders
+
+    def load_vae(self):
+        vae_model = VideoEncoderKLCausal3DModel(self.config.model_path, dtype=torch.float16, device=self.init_device, config=self.config)
+        return vae_model, vae_model
 
     def init_scheduler(self):
         if self.config.feature_caching == "NoCaching":
@@ -57,18 +55,19 @@ class HunyuanRunner(DefaultRunner):
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
         self.model.set_scheduler(scheduler)
 
-    def run_text_encoder(self, text, text_encoders, config, image_encoder_output):
+    def run_text_encoder(self, text, img):
         text_encoder_output = {}
-        for i, encoder in enumerate(text_encoders):
-            if config.task == "i2v" and i == 0:
-                text_state, attention_mask = encoder.infer(text, image_encoder_output["img"], config)
+        for i, encoder in enumerate(self.text_encoders):
+            if self.config.task == "i2v" and i == 0:
+                text_state, attention_mask = encoder.infer(text, img, self.config)
             else:
-                text_state, attention_mask = encoder.infer(text, config)
+                text_state, attention_mask = encoder.infer(text, self.config)
             text_encoder_output[f"text_encoder_{i + 1}_text_states"] = text_state.to(dtype=torch.bfloat16)
             text_encoder_output[f"text_encoder_{i + 1}_attention_mask"] = attention_mask
         return text_encoder_output
 
-    def get_closest_ratio(self, height: float, width: float, ratios: list, buckets: list):
+    @staticmethod
+    def get_closest_ratio(height: float, width: float, ratios: list, buckets: list):
         aspect_ratio = float(height) / float(width)
         diff_ratios = ratios - aspect_ratio
 
@@ -83,7 +82,8 @@ class HunyuanRunner(DefaultRunner):
 
         return closest_size, closest_ratio
 
-    def generate_crop_size_list(self, base_size=256, patch_size=32, max_ratio=4.0):
+    @staticmethod
+    def generate_crop_size_list(base_size=256, patch_size=32, max_ratio=4.0):
         num_patches = round((base_size / patch_size) ** 2)
         assert max_ratio >= 1.0
         crop_size_list = []
@@ -97,17 +97,19 @@ class HunyuanRunner(DefaultRunner):
                 wp -= 1
         return crop_size_list
 
-    def run_image_encoder(self, config, image_encoder, vae_model):
-        img = Image.open(config.image_path).convert("RGB")
+    def run_image_encoder(self, img):
+        return None
 
-        if config.i2v_resolution == "720p":
+    def run_vae_encoder(self, img):
+        kwargs = {}
+        if self.config.i2v_resolution == "720p":
             bucket_hw_base_size = 960
-        elif config.i2v_resolution == "540p":
+        elif self.config.i2v_resolution == "540p":
             bucket_hw_base_size = 720
-        elif config.i2v_resolution == "360p":
+        elif self.config.i2v_resolution == "360p":
             bucket_hw_base_size = 480
         else:
-            raise ValueError(f"config.i2v_resolution: {config.i2v_resolution} must be in [360p, 540p, 720p]")
+            raise ValueError(f"self.config.i2v_resolution: {self.config.i2v_resolution} must be in [360p, 540p, 720p]")
 
         origin_size = img.size
 
@@ -115,7 +117,8 @@ class HunyuanRunner(DefaultRunner):
         aspect_ratios = np.array([round(float(h) / float(w), 5) for h, w in crop_size_list])
         closest_size, closest_ratio = self.get_closest_ratio(origin_size[1], origin_size[0], aspect_ratios, crop_size_list)
 
-        config.target_height, config.target_width = closest_size
+        self.config.target_height, self.config.target_width = closest_size
+        kwargs["target_height"], kwargs["target_width"] = closest_size
 
         resize_param = min(closest_size)
         center_crop_param = closest_size
@@ -127,12 +130,16 @@ class HunyuanRunner(DefaultRunner):
         semantic_image_pixel_values = [ref_image_transform(img)]
         semantic_image_pixel_values = torch.cat(semantic_image_pixel_values).unsqueeze(0).unsqueeze(2).to(torch.float16).to(torch.device("cuda"))
 
-        img_latents = vae_model.encode(semantic_image_pixel_values, config).mode()
+        img_latents = self.vae_encoder.encode(semantic_image_pixel_values, self.config).mode()
 
         scaling_factor = 0.476986
         img_latents.mul_(scaling_factor)
 
-        return {"img": img, "img_latents": img_latents}
+        return img_latents, kwargs
+
+    def get_encoder_output_i2v(self, clip_encoder_out, vae_encode_out, text_encoder_output, img):
+        image_encoder_output = {"img": img, "img_latents": vae_encode_out}
+        return {"text_encoder_output": text_encoder_output, "image_encoder_output": image_encoder_output}
 
     def set_target_shape(self):
         vae_scale_factor = 2 ** (4 - 1)
@@ -143,3 +150,7 @@ class HunyuanRunner(DefaultRunner):
             int(self.config.target_height) // vae_scale_factor,
             int(self.config.target_width) // vae_scale_factor,
         )
+        return {"target_height": self.config.target_height, "target_width": self.config.target_width, "target_shape": self.config.target_shape}
+
+    def save_video_func(self, images):
+        save_videos_grid(images, self.config.save_video_path, fps=self.config.get("fps", 24))

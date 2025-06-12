@@ -27,7 +27,7 @@ if torch.cuda.get_device_capability(0) == (8, 9):
         from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
     except ImportError:
         print("sageattn not found, please install sageattention first")
-        sageattn = None, None
+        sageattn = None
 else:
     try:
         from sageattention import sageattn
@@ -122,7 +122,7 @@ class SageAttn2Weight(AttnWeightTemplate):
             )
             x = torch.cat((x1, x2), dim=1)
             x = x.view(max_seqlen_q, -1)
-        elif model_cls in ["wan2.1", "wan2.1_causvid", "wan2.1_df"]:
+        elif model_cls in ["wan2.1", "wan2.1_distill", "wan2.1_causvid", "wan2.1_df"]:
             x = sageattn(
                 q.unsqueeze(0),
                 k.unsqueeze(0),

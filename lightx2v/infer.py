@@ -1,3 +1,4 @@
+import asyncio
 import argparse
 import torch
 import torch.distributed as dist
@@ -11,9 +12,11 @@ from lightx2v.utils.registry_factory import RUNNER_REGISTER
 
 from lightx2v.models.runners.hunyuan.hunyuan_runner import HunyuanRunner
 from lightx2v.models.runners.wan.wan_runner import WanRunner
+from lightx2v.models.runners.wan.wan_distill_runner import WanDistillRunner
 from lightx2v.models.runners.wan.wan_causvid_runner import WanCausVidRunner
 from lightx2v.models.runners.wan.wan_skyreels_v2_df_runner import WanSkyreelsV2DFRunner
 from lightx2v.models.runners.graph_runner import GraphRunner
+from lightx2v.models.runners.cogvideox.cogvidex_runner import CogvideoxRunner
 
 from lightx2v.common.ops import *
 from loguru import logger
@@ -23,23 +26,26 @@ def init_runner(config):
     seed_all(config.seed)
 
     if config.parallel_attn_type:
-        dist.init_process_group(backend="nccl")
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl")
 
     if CHECK_ENABLE_GRAPH_MODE():
         default_runner = RUNNER_REGISTER[config.model_cls](config)
         runner = GraphRunner(default_runner)
+        runner.runner.init_modules()
     else:
         runner = RUNNER_REGISTER[config.model_cls](config)
+        runner.init_modules()
     return runner
 
 
-if __name__ == "__main__":
+async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_cls", type=str, required=True, choices=["wan2.1", "hunyuan", "wan2.1_causvid", "wan2.1_skyreels_v2_df"], default="hunyuan")
+    parser.add_argument("--model_cls", type=str, required=True, choices=["wan2.1", "hunyuan", "wan2.1_distill", "wan2.1_causvid", "wan2.1_skyreels_v2_df", "cogvideox"], default="hunyuan")
     parser.add_argument("--task", type=str, choices=["t2v", "i2v"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
-    parser.add_argument("--prompt_enhancer", type=str, default=None)
+    parser.add_argument("--use_prompt_enhancer", action="store_true")
 
     parser.add_argument("--prompt", type=str, required=True)
     parser.add_argument("--negative_prompt", type=str, default="")
@@ -50,7 +56,12 @@ if __name__ == "__main__":
 
     with ProfilingContext("Total Cost"):
         config = set_config(args)
+        config["mode"] = "infer"
         logger.info(f"config:\n{json.dumps(config, ensure_ascii=False, indent=4)}")
         runner = init_runner(config)
 
-        runner.run_pipeline()
+        await runner.run_pipeline()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
