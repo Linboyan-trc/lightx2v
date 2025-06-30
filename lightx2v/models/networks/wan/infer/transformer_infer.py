@@ -5,16 +5,23 @@ from lightx2v.common.offload.manager import WeightStreamManager
 from lightx2v.utils.envs import *
 
 
+# 1. 推理类
 class WanTransformerInfer:
+    # 1. 初始化
     def __init__(self, config):
+        # 1.1 配置 + 任务 + 注意力
         self.config = config
         self.task = config["task"]
         self.attention_type = config.get("attention_type", "flash_attn2")
+
+        # 1.2 块数量:30, 头数量, 输入维度, 窗口大小
         self.blocks_num = config["num_layers"]
         self.num_heads = config["num_heads"]
         self.head_dim = config["dim"] // config["num_heads"]
         self.window_size = config.get("window_size", (-1, -1))
         self.parallel_attention = None
+
+        # 1.3 offload
         if self.config["cpu_offload"]:
             self.weights_stream_mgr = WeightStreamManager()
             self.infer_func = self._infer_with_offload
@@ -63,20 +70,16 @@ class WanTransformerInfer:
 
         return x
 
+    # 2. 推理(普通版)
+    # 2.1 参数: 权重，网格尺寸，条件嵌入，pre的特征:(x, embed0, seq_lens, freqs, context)
     def _infer_without_offload(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        # 2.1 对30个block推理，更新x
+        # 2.2 参数: 单个块权重，网格尺寸，条件嵌入，pre的特征:(x, embed0, seq_lens, freqs, context)
         for block_idx in range(self.blocks_num):
-            x = self.infer_block(
-                weights.blocks_weights[block_idx],
-                grid_sizes,
-                embed,
-                x,
-                embed0,
-                seq_lens,
-                freqs,
-                context,
-            )
+            x = self.infer_block(weights.blocks_weights[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context)
         return x
 
+    # 2.1 推理单个块
     def infer_block(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
         embed0 = (weights.modulation + embed0).chunk(6, dim=1)
 

@@ -109,30 +109,38 @@ class WanModel:
         self.post_weight.to_cuda()
         self.transformer_weights.to_cuda()
 
+    # 1. 推理
     @torch.no_grad()
     def infer(self, inputs):
+        # 1. cpu_offload
         if self.config["cpu_offload"]:
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
 
+        # 2. 条件推理: pre + transformer + post
+        # 2.1 条件嵌入；张量网格的尺寸信息；特征
         embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, positive=True)
         x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
         noise_pred_cond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
 
+        # 3. 计数，所以一次WanModel的infer会增加两个cnt
         if self.config["feature_caching"] == "Tea":
             self.scheduler.cnt += 1
             if self.scheduler.cnt >= self.scheduler.num_steps:
                 self.scheduler.cnt = 0
 
+        # 4. 无条件推理: pre + transformer + post
         embed, grid_sizes, pre_infer_out = self.pre_infer.infer(self.pre_weight, inputs, positive=False)
         x = self.transformer_infer.infer(self.transformer_weights, grid_sizes, embed, *pre_infer_out)
         noise_pred_uncond = self.post_infer.infer(self.post_weight, x, embed, grid_sizes)[0]
 
+        # 5. 计数
         if self.config["feature_caching"] == "Tea":
             self.scheduler.cnt += 1
             if self.scheduler.cnt >= self.scheduler.num_steps:
                 self.scheduler.cnt = 0
 
+        # 6. 最终结果
         self.scheduler.noise_pred = noise_pred_uncond + self.config.sample_guide_scale * (noise_pred_cond - noise_pred_uncond)
 
         if self.config["cpu_offload"]:

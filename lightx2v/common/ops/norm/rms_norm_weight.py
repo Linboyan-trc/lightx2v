@@ -34,8 +34,15 @@ class RMSWeight(RMSWeightTemplate):
         super().__init__(weight_name, eps)
 
     def apply(self, input_tensor):
+        # 1. 对每个元素^2, 再对最后一个维度一整行求一个平均值，然后最后一位维度变成只有一个元素
+        # 2. 然后对每个元素开平方根，再取倒
+        # 3. 然后和原来的输入点乘，由于点乘导致后面那个张量的最后一个维度发生了广播，也就是最后一个维度由1个元素广播为了128个元素
         input_tensor = input_tensor * torch.rsqrt(input_tensor.pow(2).mean(-1, keepdim=True) + self.eps)
+        
+        # 4. 然后和权重点乘
         input_tensor = input_tensor * self.weight
+
+        # 5. 最后形状不变
         return input_tensor
 
 

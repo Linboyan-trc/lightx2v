@@ -9,8 +9,8 @@ class BaseScheduler:
     # 1.1 属性: config, step_index, latents
     def __init__(self, config):
         self.config = config
-        self.step_index = 0
         self.latents = None
+        self.step_index = 0
 
     ######################################################################
     # 2. pre计算

@@ -34,6 +34,8 @@ class HunyuanTransformerInferTeaCaching(HunyuanTransformerInfer):
         vec_ = vec.clone()
 
         # 2. 对句子进行线性偏移的偏移量，缩放因子
+        # 2. 这里使用20个double_blocks_weights中的[0]，而不是[1]~[19]
+        # 2. 因为在transformer的20层double_blocks_weights计算中，第一个double_blocks_weights[0]具有决定性作用，[1]~[19]是在[0]的基础上对输入噪声进行逐步调整
         weights.double_blocks_weights[0].to_cuda()
         img_mod1_shift, img_mod1_scale, _, _, _, _ = weights.double_blocks_weights[0].img_mod.apply(vec_).chunk(6, dim=-1)
         weights.double_blocks_weights[0].to_cpu_sync()
@@ -111,59 +113,64 @@ class HunyuanTransformerInferTaylorCaching(HunyuanTransformerInfer):
     #############################################################################################################
 
     def infer(self, weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec=None, frist_frame_token_num=None):
-        # 得到256
+        # 1. latents: 得到32400
         txt_seq_len = txt.shape[0]
         
-        # 得到32400
+        # 2. prompt: 得到256
         img_seq_len = img.shape[0]
 
+        # 20个
         # 分别处理latents和prompt
         self.scheduler.current["stream"] = "double_stream"
         for i in range(self.double_blocks_num):
             self.scheduler.current["layer"] = i
             img, txt = self.infer_double_block(weights.double_blocks_weights[i], img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num)
 
+        # 3. 噪声卷积和文本特征拼接，形状为[32656, 3072]
         x = torch.cat((img, txt), 0)
 
+        # 40个
         # 合并
         self.scheduler.current["stream"] = "single_stream"
         for i in range(self.single_blocks_num):
             self.scheduler.current["layer"] = i
             x = self.infer_single_block(weights.single_blocks_weights[i], x, vec, txt_seq_len, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis, token_replace_vec, frist_frame_token_num)
 
-        # 取出前img_seq_len行元素，形成更小的一个二维张量img
         img = x[:img_seq_len, ...]
         return img, vec
 
     def infer_double_block(self, weights, img, txt, vec, cu_seqlens_qkv, max_seqlen_qkv, freqs_cis):
-        # vec形状仍为[1, 3072]，对每个元素更新
+        # 1. vec修改，让正值几乎不变，让负值接近0
+        # 1.1 vec形状为[1, 3072]，来自timesteps[0]的时间步嵌入，prompt经过clip的编码，guidance的嵌入
+        # 1.2 silu对每个元素更新
         vec_silu = torch.nn.functional.silu(vec)
 
+        # 2. 传入的weights是一个double_blocks.0.xxx.weight, .bias之类的
+        # 2. 每个double_blocks有7个图片属性，img_mod, img_attn_qkv, img_attn_q_norm, img_attn_k_norm, img_mlp_fc1, img_mlp_fc2, img_attn_proj
+        # 2. 每个double_blocks有7个文本属性，mod, attn_qkv, attn_q_norm, attn_k_norm, mlp_fc1, mlp_fc2, attn_proj
+
+        # 3. 这里是根据开源的Hunyuan的模型结构来决定的Transformer运算流程，并不是一个规范的标程
+
+        # 4. 先进行img: mod调制，就是对融合后的特征向量做线性变换，变换的结果是形状从[1, 3072]变为[1, 18432]
+        # 4.1 然后切成6部分，分别是1_shift, scale, gate, 2_shift, scale, gate，每个形状是[1, 3072]
         img_mod_out = weights.img_mod.apply(vec_silu)
-        (
-            img_mod1_shift,
-            img_mod1_scale,
-            img_mod1_gate,
-            img_mod2_shift,
-            img_mod2_scale,
-            img_mod2_gate,
-        ) = img_mod_out.chunk(6, dim=-1)
+        img_mod1_shift, img_mod1_scale, img_mod1_gate, img_mod2_shift, img_mod2_scale, img_mod2_gate = img_mod_out.chunk(6, dim=-1)
 
+        # 4. 再进行txt: mod调制，就是对融合后的特征向量做线性变换，变换的结果是形状从[1, 3072]变为[1, 18432]
+        # 4.1 然后切成6部分，分别是1_shift, scale, gate, 2_shift, scale, gate，每个形状是[1, 3072]
+        # 4.2 两者都是对融合后的特征向量进行调制，只不过使用的权重矩阵不一样
         txt_mod_out = weights.txt_mod.apply(vec_silu)
-        (
-            txt_mod1_shift,
-            txt_mod1_scale,
-            txt_mod1_gate,
-            txt_mod2_shift,
-            txt_mod2_scale,
-            txt_mod2_gate,
-        ) = txt_mod_out.chunk(6, dim=-1)
+        txt_mod1_shift, txt_mod1_scale, txt_mod1_gate, txt_mod2_shift, txt_mod2_scale, txt_mod2_gate = txt_mod_out.chunk(6, dim=-1)
 
-        # 对于full，正常计算
+        # 5. 开始选择是否进行注意力计算
+        # 5.1 正常计算
         if self.scheduler.current["type"] == "full":
+            # 5. 再进行img: img_attn_qkv, img_attn_q_norm, img_attn_k_norm, 自注意力计算
+            # 5. 再进行txt: attn_qkv, attn_q_norm, attn_k_norm, 自注意力计算
             img_q, img_k, img_v = self.infer_double_block_img_pre_atten(weights, img, img_mod1_scale, img_mod1_shift, freqs_cis)
             txt_q, txt_k, txt_v = self.infer_double_block_txt_pre_atten(weights, txt, txt_mod1_scale, txt_mod1_shift)
 
+            # 6. 把img和txt的自注意力输出按照第一维拼接
             q = torch.cat((img_q, txt_q), dim=0)
             k = torch.cat((img_k, txt_k), dim=0)
             v = torch.cat((img_v, txt_v), dim=0)
@@ -192,7 +199,10 @@ class HunyuanTransformerInferTaylorCaching(HunyuanTransformerInfer):
                     # max_seqlen_qkv=max_seqlen_qkv,
                 )
 
+            # 7. 注意力输出attn形状为[32656, 3072]
+            # 7.1 attn[:32400]就是取前32400行，attn[32400:]就是取前32400之后的行
             img_attn, txt_attn = attn[: img.shape[0]], attn[img.shape[0] :]
+
             img = self.infer_double_block_img_post_atten(
                 weights,
                 img,
@@ -213,31 +223,28 @@ class HunyuanTransformerInferTaylorCaching(HunyuanTransformerInfer):
             )
             return img, txt
 
-        # 对于使用特征缓存，使用taylor公式计算
+        # 5.2 近似计算
         elif self.scheduler.current["type"] == "taylor_cache":
+            # 5.2 直接跳过噪声卷积的层归一化，到注意力输出的线性变换，用泰勒计算替代第一次残差
+            # 5.2 直接开始第一次残差连接前的gate
             self.scheduler.current["module"] = "img_attn"
-
             out = taylor_formula(self.scheduler.cache_dic, self.scheduler.current)
-
             out = out * img_mod1_gate
             img = img + out
 
+            # 5.2 用泰勒计算替代第二次残差
+            # 5.2 直接开始第二次残差连接前的gate
             self.scheduler.current["module"] = "img_mlp"
-
             out = taylor_formula(self.scheduler.cache_dic, self.scheduler.current)
-
             out = out * img_mod2_gate
             img = img + out
 
             self.scheduler.current["module"] = "txt_attn"
-
             out = taylor_formula(self.scheduler.cache_dic, self.scheduler.current)
-
             out = out * txt_mod1_gate
             txt = txt + out
 
             self.scheduler.current["module"] = "txt_mlp"
-
             out = out * txt_mod2_gate
             txt = txt + out
 
@@ -253,11 +260,12 @@ class HunyuanTransformerInferTaylorCaching(HunyuanTransformerInfer):
         img_mod2_scale,
         img_mod2_gate,
     ):
-        self.scheduler.current["module"] = "img_attn"
-        taylor_cache_init(self.scheduler.cache_dic, self.scheduler.current)
+        # 1. 在cache_dic中设置cache[-1]["double_stream"][0]["img_attn"] = {}
+        self.scheduler.current["module"] = "img_attn"                                   
+        taylor_cache_init(self.scheduler.cache_dic, self.scheduler.current)             
 
         out = weights.img_attn_proj.apply(img_attn)
-        derivative_approximation(self.scheduler.cache_dic, self.scheduler.current, out)
+        derivative_approximation(self.scheduler.cache_dic, self.scheduler.current, out) 
 
         out = out * img_mod1_gate
         img = img + out
@@ -314,7 +322,8 @@ class HunyuanTransformerInferTaylorCaching(HunyuanTransformerInfer):
         out = weights.modulation.apply(out)
         mod_shift, mod_scale, mod_gate = out.chunk(3, dim=-1)
 
-        # 对于full，正常计算
+        # 1. 开始选择是否进行注意力计算
+        # 1.1 正常计算
         if self.scheduler.current["type"] == "full":
             out = torch.nn.functional.layer_norm(x, (x.shape[1],), None, None, 1e-6)
             x_mod = out * (1 + mod_scale) + mod_shift
@@ -372,7 +381,7 @@ class HunyuanTransformerInferTaylorCaching(HunyuanTransformerInfer):
             x = x + out
             return x
 
-        # 对于使用特征缓存，使用taylor公式计算
+        # 1.2 近似计算
         elif self.scheduler.current["type"] == "taylor_cache":
             self.scheduler.current["module"] = "total"
             out = taylor_formula(self.scheduler.cache_dic, self.scheduler.current)

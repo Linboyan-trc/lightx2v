@@ -58,13 +58,27 @@ class MMWeight(MMWeightTemplate):
         self.weight = weight_dict[self.weight_name].t().cuda()
         self.bias = weight_dict[self.bias_name].cuda() if self.bias_name is not None else None
 
+    # 1. 比如embedding是[1,256]
     def apply(self, input_tensor):
+        # 1. shape就是(1,256)
         shape = (input_tensor.shape[0], self.weight.shape[1])
+        
+        # 2. 对齐一下数据类型
         dtype = input_tensor.dtype
+
+        # 3. 对齐一下所在设备
         device = input_tensor.device
+
+        # 4. 创建一个[1,256]的随机张量
         output_tensor = torch.empty(shape, dtype=dtype, device=device, requires_grad=False)
+        
+        # 5. embedding * weight
+        # 5. embedding为[1, 256], weight为[256, ...] 最终形状为[1, ...]
         if self.bias is None:
             return torch.mm(input_tensor, self.weight, out=output_tensor)
+        
+        # 5. bias + embedding * weight
+        # 5. embedding为[1, 256], weight为[256, ...] 最终形状为[1, ...]
         return torch.addmm(self.bias, input_tensor, self.weight, out=output_tensor)
 
 

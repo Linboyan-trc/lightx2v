@@ -144,6 +144,8 @@ def cal_type(cache_dic, current):
     """
     Determine calculation type for this step
     """
+    # 1. 当前时间步索引小于cache_dic["first_enhance"]，则为第一步，first_step为真
+    # 1. 当前时间步索引>=cache_dic["first_enhance"]，则不为第一步，first_step为假
     if (cache_dic["fresh_ratio"] == 0.0) and (not cache_dic["taylor_cache"]):
         # FORA:Uniform
         first_step = current["step"] == 0
@@ -152,23 +154,25 @@ def cal_type(cache_dic, current):
         first_step = current["step"] < cache_dic["first_enhance"]
         # first_step = (current['step'] <= 3)
 
+    # 2. 对于第一步，获取cache_dic["fresh_threshold"]为5
+    # 2. 对于不是第一步，获取cache_dic["cal_threshold"]为5
     force_fresh = cache_dic["force_fresh"]
     if not first_step:
         fresh_interval = cache_dic["cal_threshold"]
     else:
         fresh_interval = cache_dic["fresh_threshold"]
 
+    # 3. 对于第一步
+    # 3.1 设置current["type"]为"full"，cache_dic["cache_counter"]为0，当前步骤加入激活步骤，然后force_scheduler()
     if (first_step) or (cache_dic["cache_counter"] == fresh_interval - 1):
         current["type"] = "full"
         cache_dic["cache_counter"] = 0
         current["activated_steps"].append(current["step"])
         # current['activated_times'].append(current['t'])
         force_scheduler(cache_dic, current)
-
     elif cache_dic["taylor_cache"]:
         cache_dic["cache_counter"] += 1
         current["type"] = "taylor_cache"
-
     else:
         cache_dic["cache_counter"] += 1
         if cache_dic["duca"]:

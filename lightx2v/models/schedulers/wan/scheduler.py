@@ -5,12 +5,19 @@ from typing import List, Optional, Tuple, Union
 from lightx2v.models.schedulers.scheduler import BaseScheduler
 
 
+# 1. 调度器
 class WanScheduler(BaseScheduler):
+    # 1. 初始化
     def __init__(self, config):
+        # 1.1 父类初始化
         super().__init__(config)
+
+        # 1.2 设备，推理步数，视频长度
         self.device = torch.device("cuda")
         self.infer_steps = self.config.infer_steps
         self.target_video_length = self.config.target_video_length
+
+        # 1.3 采样偏移值，和采样过程中的噪声调度有关；基础偏移量；训练用的时间步数；禁用校正器的时间步；求解器的阶数；噪声
         self.sample_shift = self.config.sample_shift
         self.shift = 1
         self.num_train_timesteps = 1000
