@@ -21,7 +21,7 @@
 .log
 *.pid
 *.ipynb*
-*.mp4
+# *.mp4
 build/
 dist/
 .cache/
