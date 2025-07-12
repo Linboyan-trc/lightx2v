@@ -738,31 +738,38 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(weights.blocks[block_idx].compute_phases[0], embed0)
 
             y_out = self.infer_self_attn(weights.blocks[block_idx].compute_phases[1], grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa)
-            if block_idx >= self.blocks_num - 5:
-                if self.infer_conditional:
-                    self.derivative_approximation(self.blocks_cache_even[block_idx], "self_attn_out", y_out)
-                else:
-                    self.derivative_approximation(self.blocks_cache_odd[block_idx], "self_attn_out", y_out)
+            # if block_idx >= self.blocks_num - 5:
+            #     if self.infer_conditional:
+            #         self.derivative_approximation(self.blocks_cache_even[block_idx], "self_attn_out", y_out)
+            #     else:
+            #         self.derivative_approximation(self.blocks_cache_odd[block_idx], "self_attn_out", y_out)
 
             x, attn_out = self.infer_cross_attn(weights.blocks[block_idx].compute_phases[2], x, context, y_out, gate_msa)
-            if block_idx >= self.blocks_num - 5:
-                if self.infer_conditional:
-                    self.derivative_approximation(self.blocks_cache_even[block_idx], "cross_attn_out", attn_out)
-                else:
-                    self.derivative_approximation(self.blocks_cache_odd[block_idx], "cross_attn_out", attn_out)
+            # if block_idx >= self.blocks_num - 5:
+            #     if self.infer_conditional:
+            #         self.derivative_approximation(self.blocks_cache_even[block_idx], "cross_attn_out", attn_out)
+            #     else:
+            #         self.derivative_approximation(self.blocks_cache_odd[block_idx], "cross_attn_out", attn_out)
 
             y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
-            if block_idx >= self.blocks_num - 5:
-                if self.infer_conditional:
-                    self.derivative_approximation(self.blocks_cache_even[block_idx], "ffn_out", y_out)
-                else:
-                    self.derivative_approximation(self.blocks_cache_odd[block_idx], "ffn_out", y_out)
+            # if block_idx >= self.blocks_num - 5:
+            #     if self.infer_conditional:
+            #         self.derivative_approximation(self.blocks_cache_even[block_idx], "ffn_out", y_out)
+            #     else:
+            #         self.derivative_approximation(self.blocks_cache_odd[block_idx], "ffn_out", y_out)
 
+            ori_x = x.clone()
             x = self.post_process(x, y_out, c_gate_msa)
+            if self.infer_conditional:
+                self.derivative_approximation(self.blocks_cache_even[block_idx], "x_out", x - ori_x)
+            else:
+                self.derivative_approximation(self.blocks_cache_odd[block_idx], "x_out", x - ori_x)
+
         return x
 
     def infer_using_cache(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
-        for block_idx in range(25, self.blocks_num):
+        # for block_idx in range(25, self.blocks_num):
+        for block_idx in range(self.blocks_num):
             x = self.infer_block(weights.blocks[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx)
         return x
 
@@ -772,28 +779,32 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
 
         # 2. residual and taylor
         if self.infer_conditional:
-            out = self.taylor_formula(self.blocks_cache_even[i]["self_attn_out"])
-            out = out * gate_msa.squeeze(0)
-            x = x + out
+            # out = self.taylor_formula(self.blocks_cache_even[i]["self_attn_out"])
+            # out = out * gate_msa.squeeze(0)
+            # x = x + out
 
-            out = self.taylor_formula(self.blocks_cache_even[i]["cross_attn_out"])
-            x = x + out
+            # out = self.taylor_formula(self.blocks_cache_even[i]["cross_attn_out"])
+            # x = x + out
 
-            out = self.taylor_formula(self.blocks_cache_even[i]["ffn_out"])
-            out = out * c_gate_msa.squeeze(0)
-            x = x + out
+            # out = self.taylor_formula(self.blocks_cache_even[i]["ffn_out"])
+            # out = out * c_gate_msa.squeeze(0)
+            # x = x + out
+
+            x += self.taylor_formula(self.blocks_cache_even[i]["x_out"])
 
         else:
-            out = self.taylor_formula(self.blocks_cache_odd[i]["self_attn_out"])
-            out = out * gate_msa.squeeze(0)
-            x = x + out
+            # out = self.taylor_formula(self.blocks_cache_odd[i]["self_attn_out"])
+            # out = out * gate_msa.squeeze(0)
+            # x = x + out
 
-            out = self.taylor_formula(self.blocks_cache_odd[i]["cross_attn_out"])
-            x = x + out
+            # out = self.taylor_formula(self.blocks_cache_odd[i]["cross_attn_out"])
+            # x = x + out
 
-            out = self.taylor_formula(self.blocks_cache_odd[i]["ffn_out"])
-            out = out * c_gate_msa.squeeze(0)
-            x = x + out
+            # out = self.taylor_formula(self.blocks_cache_odd[i]["ffn_out"])
+            # out = out * c_gate_msa.squeeze(0)
+            # x = x + out
+
+            x += self.taylor_formula(self.blocks_cache_odd[i]["x_out"])
 
         return x
 
