@@ -18,6 +18,7 @@ from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import
     WanTransformerInferTaylorCaching,
     WanTransformerInferAdaCaching,
     WanTransformerInferCustomCaching,
+    WanTransformerInferCustomCachingV2,
 )
 from safetensors import safe_open
 import lightx2v.attentions.distributed.ulysses.wrap as ulysses_dist_wrap
@@ -68,6 +69,8 @@ class WanModel:
             self.transformer_infer_class = WanTransformerInferAdaCaching
         elif self.config["feature_caching"] == "Custom":
             self.transformer_infer_class = WanTransformerInferCustomCaching
+        elif self.config["feature_caching"] == "CustomV2":
+            self.transformer_infer_class = WanTransformerInferCustomCachingV2
         else:
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config['feature_caching']}")
 

@@ -743,10 +743,62 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             x = self.post_process(x, y_out, c_gate_msa)
         return x
 
-    def infer_using_cache(self, x):
+    def infer_using_cache(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
         for block_idx in range(25, self.blocks_num):
             x = self.infer_block(weights.blocks[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx)
         return x
 
+    def infer_block(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context, i):
+        # 1. shift, scale, gate
+        _, _, gate_msa, _, _, c_gate_msa = self.infer_modulation(weights.compute_phases[0], embed0)
+
+        # 2. residual and taylor
+        if self.infer_conditional:
+            out = self.taylor_formula(self.blocks_cache_even[i]["self_attn_out"])
+            out = out * gate_msa.squeeze(0)
+            x = x + out
+
+            out = self.taylor_formula(self.blocks_cache_even[i]["cross_attn_out"])
+            x = x + out
+
+            out = self.taylor_formula(self.blocks_cache_even[i]["ffn_out"])
+            out = out * c_gate_msa.squeeze(0)
+            x = x + out
+
+        else:
+            out = self.taylor_formula(self.blocks_cache_odd[i]["self_attn_out"])
+            out = out * gate_msa.squeeze(0)
+            x = x + out
+
+            out = self.taylor_formula(self.blocks_cache_odd[i]["cross_attn_out"])
+            x = x + out
+
+            out = self.taylor_formula(self.blocks_cache_odd[i]["ffn_out"])
+            out = out * c_gate_msa.squeeze(0)
+            x = x + out
+
+        return x
+
     def clear(self):
-        pass
+        for cache in self.blocks_cache_even:
+            for key in cache:
+                if cache[key] is not None:
+                    if isinstance(cache[key], torch.Tensor):
+                        cache[key] = cache[key].cpu()
+                    elif isinstance(cache[key], dict):
+                        for k, v in cache[key].items():
+                            if isinstance(v, torch.Tensor):
+                                cache[key][k] = v.cpu()
+            cache.clear()
+
+        for cache in self.blocks_cache_odd:
+            for key in cache:
+                if cache[key] is not None:
+                    if isinstance(cache[key], torch.Tensor):
+                        cache[key] = cache[key].cpu()
+                    elif isinstance(cache[key], dict):
+                        for k, v in cache[key].items():
+                            if isinstance(v, torch.Tensor):
+                                cache[key][k] = v.cpu()
+            cache.clear()
+        torch.cuda.empty_cache()
