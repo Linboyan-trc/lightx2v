@@ -691,6 +691,24 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
         self.blocks_cache_even = [{} for _ in range(self.blocks_num)]
         self.blocks_cache_odd = [{} for _ in range(self.blocks_num)]
 
+    # 1. get taylor step_diff when there is two caching_records in scheduler
+    def get_taylor_step_diff(self):
+        step_diff = 0
+        if self.infer_conditional:
+            current_step = self.scheduler.step_index
+            last_calc_step = current_step - 1
+            while last_calc_step >= 0 and not self.scheduler.caching_records[last_calc_step]:
+                last_calc_step -= 1
+            step_diff = current_step - last_calc_step
+        else:
+            current_step = self.scheduler.step_index
+            last_calc_step = current_step - 1
+            while last_calc_step >= 0 and not self.scheduler.caching_records_2[last_calc_step]:
+                last_calc_step -= 1
+            step_diff = current_step - last_calc_step
+
+        return step_diff
+
     def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
         if self.infer_conditional:
             index = self.scheduler.step_index
