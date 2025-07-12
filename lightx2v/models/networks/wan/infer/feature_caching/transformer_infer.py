@@ -735,6 +735,8 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
 
     def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
         for block_idx in range(self.blocks_num):
+            ori_x = x.clone()
+
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(weights.blocks[block_idx].compute_phases[0], embed0)
 
             y_out = self.infer_self_attn(weights.blocks[block_idx].compute_phases[1], grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa)
@@ -758,7 +760,6 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             #     else:
             #         self.derivative_approximation(self.blocks_cache_odd[block_idx], "ffn_out", y_out)
 
-            ori_x = x.clone()
             x = self.post_process(x, y_out, c_gate_msa)
             if self.infer_conditional:
                 self.derivative_approximation(self.blocks_cache_even[block_idx], "x_out", x - ori_x)
@@ -790,8 +791,8 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             # out = out * c_gate_msa.squeeze(0)
             # x = x + out
 
-            # x += self.taylor_formula(self.blocks_cache_even[i]["x_out"])
-            x += self.blocks_cache_even[i]["x_out"][0]
+            x += self.taylor_formula(self.blocks_cache_even[i]["x_out"])
+            # x += self.blocks_cache_even[i]["x_out"][0]
 
         else:
             # out = self.taylor_formula(self.blocks_cache_odd[i]["self_attn_out"])
@@ -806,7 +807,7 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             # x = x + out
 
             x += self.taylor_formula(self.blocks_cache_odd[i]["x_out"])
-            x += self.blocks_cache_odd[i]["x_out"][0]
+            # x += self.blocks_cache_odd[i]["x_out"][0]
 
         return x
 
