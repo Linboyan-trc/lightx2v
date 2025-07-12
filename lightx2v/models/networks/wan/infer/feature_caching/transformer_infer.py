@@ -790,7 +790,8 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             # out = out * c_gate_msa.squeeze(0)
             # x = x + out
 
-            x += self.taylor_formula(self.blocks_cache_even[i]["x_out"])
+            # x += self.taylor_formula(self.blocks_cache_even[i]["x_out"])
+            x += self.blocks_cache_even[i]["x_out"][0]
 
         else:
             # out = self.taylor_formula(self.blocks_cache_odd[i]["self_attn_out"])
@@ -805,6 +806,7 @@ class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingT
             # x = x + out
 
             x += self.taylor_formula(self.blocks_cache_odd[i]["x_out"])
+            x += self.blocks_cache_odd[i]["x_out"][0]
 
         return x
 
