@@ -682,3 +682,71 @@ class WanTransformerInferCustomCaching(WanTransformerInfer, BaseTaylorCachingTra
         self.previous_e0_odd = None
 
         torch.cuda.empty_cache()
+
+
+class WanTransformerInferCustomCachingV2(WanTransformerInfer, BaseTaylorCachingTransformerInfer):
+    def __init__(self, config):
+        super().__init__(config)
+
+        self.blocks_cache_even = [{} for _ in range(self.blocks_num)]
+        self.blocks_cache_odd = [{} for _ in range(self.blocks_num)]
+
+    def infer(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        if self.infer_conditional:
+            index = self.scheduler.step_index
+            caching_records = self.scheduler.caching_records
+
+            if caching_records[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+
+        else:
+            index = self.scheduler.step_index
+            caching_records_2 = self.scheduler.caching_records_2
+
+            if caching_records_2[index]:
+                x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+            else:
+                x = self.infer_using_cache(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
+
+        if self.config.enable_cfg:
+            self.switch_status()
+
+        return x
+
+    def infer_calculating(self, weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context):
+        for block_idx in range(self.blocks_num):
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = self.infer_modulation(weights.blocks[block_idx].compute_phases[0], embed0)
+
+            y_out = self.infer_self_attn(weights.blocks[block_idx].compute_phases[1], grid_sizes, x, seq_lens, freqs, shift_msa, scale_msa)
+            if block_idx >= self.blocks_num - 5:
+                if self.infer_conditional:
+                    self.derivative_approximation(self.blocks_cache_even[block_idx], "self_attn_out", y_out)
+                else:
+                    self.derivative_approximation(self.blocks_cache_odd[block_idx], "self_attn_out", y_out)
+
+            x, attn_out = self.infer_cross_attn(weights.blocks[block_idx].compute_phases[2], x, context, y_out, gate_msa)
+            if block_idx >= self.blocks_num - 5:
+                if self.infer_conditional:
+                    self.derivative_approximation(self.blocks_cache_even[block_idx], "cross_attn_out", attn_out)
+                else:
+                    self.derivative_approximation(self.blocks_cache_odd[block_idx], "cross_attn_out", attn_out)
+
+            y_out = self.infer_ffn(weights.blocks[block_idx].compute_phases[3], x, attn_out, c_shift_msa, c_scale_msa)
+            if block_idx >= self.blocks_num - 5:
+                if self.infer_conditional:
+                    self.derivative_approximation(self.blocks_cache_even[block_idx], "ffn_out", y_out)
+                else:
+                    self.derivative_approximation(self.blocks_cache_odd[block_idx], "ffn_out", y_out)
+
+            x = self.post_process(x, y_out, c_gate_msa)
+        return x
+
+    def infer_using_cache(self, x):
+        for block_idx in range(25, self.blocks_num):
+            x = self.infer_block(weights.blocks[block_idx], grid_sizes, embed, x, embed0, seq_lens, freqs, context, block_idx)
+        return x
+
+    def clear(self):
+        pass
