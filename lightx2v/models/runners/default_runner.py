@@ -14,33 +14,31 @@ from loguru import logger
 from .base_runner import BaseRunner
 
 
+######################################################################################################################################################
+# 1. BaseRunner -> DefaultRunner -> WanRunner
 class DefaultRunner(BaseRunner):
+    # 1. 初始化
     def __init__(self, config):
+        # 1.1 设置配置
         super().__init__(config)
+
+        # 1.2 根据prompt_enhancer设置
         self.has_prompt_enhancer = False
         self.progress_callback = None
-        if self.config["task"] == "t2v" and self.config.get("sub_servers", {}).get("prompt_enhancer") is not None:
+        if self.config.task == "t2v" and self.config.get("sub_servers", {}).get("prompt_enhancer") is not None:
             self.has_prompt_enhancer = True
             if not self.check_sub_servers("prompt_enhancer"):
                 self.has_prompt_enhancer = False
                 logger.warning("No prompt enhancer server available, disable prompt enhancer.")
         if not self.has_prompt_enhancer:
-            self.config["use_prompt_enhancer"] = False
+            self.config.use_prompt_enhancer = False
+
+        # 1.3 设置GPU
         self.set_init_device()
 
-    def init_modules(self):
-        logger.info("Initializing runner modules...")
-        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
-            self.load_model()
-        self.run_dit = self._run_dit_local
-        self.run_vae_decoder = self._run_vae_decoder_local
-        if self.config["task"] == "i2v":
-            self.run_input_encoder = self._run_input_encoder_local_i2v
-        else:
-            self.run_input_encoder = self._run_input_encoder_local_t2v
-
+    # 1.1 设置GPU，一般就是单卡
     def set_init_device(self):
-        if self.config["parallel_attn_type"]:
+        if self.config.parallel_attn_type:
             cur_rank = dist.get_rank()
             torch.cuda.set_device(cur_rank)
         if self.config.cpu_offload:
@@ -48,6 +46,28 @@ class DefaultRunner(BaseRunner):
         else:
             self.init_device = torch.device("cuda")
 
+    ##################################################################################################################################
+    # 2. 加载模型
+    def init_modules(self):
+        # 2.1 没有启动懒加载，或者不加载的话，正常加载模型
+        # 2.1 加载了text, image的encoder, 推理的transfomer, 保存视频的vae
+        logger.info("Initializing runner modules...")
+        if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
+            self.load_model()
+
+        # 2.2 设置text, image编码器
+        if self.config.task == "i2v":
+            self.run_input_encoder = self._run_input_encoder_local_i2v
+        else:
+            self.run_input_encoder = self._run_input_encoder_local_t2v
+        
+        # 2.3 设置transformer运行方法
+        self.run_dit = self._run_dit_local
+
+        # 2.4 设置vae运行方法
+        self.run_vae_decoder = self._run_vae_decoder_local
+
+    # 2.1 加载模型，都在WanRunner
     @ProfilingContext("Load models")
     def load_model(self):
         self.model = self.load_transformer()
@@ -55,6 +75,67 @@ class DefaultRunner(BaseRunner):
         self.image_encoder = self.load_image_encoder()
         self.vae_encoder, self.vae_decoder = self.load_vae()
 
+    # 2.2 设置text, image编码器
+    @ProfilingContext("Run Encoders")
+    def _run_input_encoder_local_i2v(self):
+        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
+        img = Image.open(self.config["image_path"]).convert("RGB")
+        clip_encoder_out = self.run_image_encoder(img)
+        vae_encode_out = self.run_vae_encoder(img)
+        text_encoder_output = self.run_text_encoder(prompt, img)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
+
+    @ProfilingContext("Run Encoders")
+    def _run_input_encoder_local_t2v(self):
+        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
+        text_encoder_output = self.run_text_encoder(prompt, None)
+        torch.cuda.empty_cache()
+        gc.collect()
+        return {
+            "text_encoder_output": text_encoder_output,
+            "image_encoder_output": None,
+        }
+
+    # 2.3 设置transformer运行方法
+    @ProfilingContext("Run DiT")
+    def _run_dit_local(self):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.model = self.load_transformer()
+        self.init_scheduler()
+        self.model.scheduler.prepare(self.inputs["image_encoder_output"])
+        latents, generator = self.run()
+        self.end_run()
+        return latents, generator
+    
+    def end_run(self):
+        self.model.scheduler.clear()
+        del self.inputs, self.model.scheduler
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
+                self.model.transformer_infer.weights_stream_mgr.clear()
+            if hasattr(self.model.transformer_weights, "clear"):
+                self.model.transformer_weights.clear()
+            self.model.pre_weight.clear()
+            self.model.post_weight.clear()
+            del self.model
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    # 2.4 设置vae运行方法
+    @ProfilingContext("Run VAE Decoder")
+    def _run_vae_decoder_local(self, latents, generator):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.vae_decoder = self.load_vae_decoder()
+        images = self.vae_decoder.decode(latents, generator=generator, config=self.config)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.vae_decoder
+            torch.cuda.empty_cache()
+            gc.collect()
+        return images
+
+    ##################################################################################################################################
     def check_sub_servers(self, task_type):
         urls = self.config.get("sub_servers", {}).get(task_type, [])
         available_servers = []
@@ -120,64 +201,7 @@ class DefaultRunner(BaseRunner):
         self.model.scheduler.step_pre(step_index=step_index)
         self.model.infer(self.inputs)
         self.model.scheduler.step_post()
-
-    def end_run(self):
-        self.model.scheduler.clear()
-        del self.inputs, self.model.scheduler
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            if hasattr(self.model.transformer_infer, "weights_stream_mgr"):
-                self.model.transformer_infer.weights_stream_mgr.clear()
-            if hasattr(self.model.transformer_weights, "clear"):
-                self.model.transformer_weights.clear()
-            self.model.pre_weight.clear()
-            self.model.post_weight.clear()
-            del self.model
-        torch.cuda.empty_cache()
-        gc.collect()
-
-    @ProfilingContext("Run Encoders")
-    def _run_input_encoder_local_i2v(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        img = Image.open(self.config["image_path"]).convert("RGB")
-        clip_encoder_out = self.run_image_encoder(img)
-        vae_encode_out = self.run_vae_encoder(img)
-        text_encoder_output = self.run_text_encoder(prompt, img)
-        torch.cuda.empty_cache()
-        gc.collect()
-        return self.get_encoder_output_i2v(clip_encoder_out, vae_encode_out, text_encoder_output, img)
-
-    @ProfilingContext("Run Encoders")
-    def _run_input_encoder_local_t2v(self):
-        prompt = self.config["prompt_enhanced"] if self.config["use_prompt_enhancer"] else self.config["prompt"]
-        text_encoder_output = self.run_text_encoder(prompt, None)
-        torch.cuda.empty_cache()
-        gc.collect()
-        return {
-            "text_encoder_output": text_encoder_output,
-            "image_encoder_output": None,
-        }
-
-    @ProfilingContext("Run DiT")
-    def _run_dit_local(self):
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.model = self.load_transformer()
-        self.init_scheduler()
-        self.model.scheduler.prepare(self.inputs["image_encoder_output"])
-        latents, generator = self.run()
-        self.end_run()
-        return latents, generator
-
-    @ProfilingContext("Run VAE Decoder")
-    def _run_vae_decoder_local(self, latents, generator):
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.vae_decoder = self.load_vae_decoder()
-        images = self.vae_decoder.decode(latents, generator=generator, config=self.config)
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.vae_decoder
-            torch.cuda.empty_cache()
-            gc.collect()
-        return images
-
+  
     @ProfilingContext("Save video")
     def save_video(self, images):
         if not self.config.parallel_attn_type or (self.config.parallel_attn_type and dist.get_rank() == 0):

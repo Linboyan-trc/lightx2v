@@ -194,9 +194,11 @@ class WanModel:
         self.post_weight.to_cuda()
         self.transformer_weights.to_cuda()
 
+    # 1. 推理
     @torch.no_grad()
     def infer(self, inputs):
-        if self.config["cpu_offload"]:
+        # 1.1 如果cpu_offload，先把pre和post的权重迁移到GPU上，transformer会在后面根据粒度和延迟要求逐步迁移到GPU上
+        if self.config.get("cpu_offload", False):
             self.pre_weight.to_cuda()
             self.post_weight.to_cuda()
 
@@ -217,7 +219,7 @@ class WanModel:
 
             self.scheduler.noise_pred = noise_pred_uncond + self.config.sample_guide_scale * (self.scheduler.noise_pred - noise_pred_uncond)
 
-            if self.config["cpu_offload"]:
+            if self.config.get("cpu_offload", False):
                 self.pre_weight.to_cpu()
                 self.post_weight.to_cpu()
 

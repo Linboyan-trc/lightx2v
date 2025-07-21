@@ -9,15 +9,17 @@ from lightx2v.utils.envs import *
 from functools import partial
 
 
+# 1. transformer阶段推理
 class WanTransformerInfer(BaseTransformerInfer):
+    # 1. 初始化
     def __init__(self, config):
         self.config = config
-        self.task = config["task"]
+        self.task = config.task
         self.attention_type = config.get("attention_type", "flash_attn2")
-        self.blocks_num = config["num_layers"]
+        self.blocks_num = config.num_layers
         self.phases_num = 4
-        self.num_heads = config["num_heads"]
-        self.head_dim = config["dim"] // config["num_heads"]
+        self.num_heads = config.num_heads
+        self.head_dim = config.dim // config.num_heads
         self.window_size = config.get("window_size", (-1, -1))
         self.parallel_attention = None
         if config.get("rotary_chunk", False):
@@ -28,7 +30,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
         self.mask_map = None
 
-        if self.config["cpu_offload"]:
+        if self.config.get("cpu_offload", False):
             if torch.cuda.get_device_capability(0) == (9, 0):
                 assert self.config["self_attn_1_type"] != "sage_attn2"
             if "offload_ratio" in self.config:

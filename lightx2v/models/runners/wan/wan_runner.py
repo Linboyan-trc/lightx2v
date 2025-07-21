@@ -27,12 +27,19 @@ from lightx2v.utils.utils import cache_video
 from loguru import logger
 
 
+######################################################################################################################################################
+# 1. BaseRunner -> DefaultRunner -> WanRunner
 @RUNNER_REGISTER("wan2.1")
 class WanRunner(DefaultRunner):
+    # 1. 初始化
     def __init__(self, config):
+        # 1.1 初始化
         super().__init__(config)
 
+    ##################################################################################################################################
+    # 2.1 加载模型
     def load_transformer(self):
+        # 2.1 初始化WanModel
         model = WanModel(
             self.config.model_path,
             self.config,
@@ -48,39 +55,6 @@ class WanRunner(DefaultRunner):
                 lora_wrapper.apply_lora(lora_name, strength)
                 logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
         return model
-
-    def load_image_encoder(self):
-        image_encoder = None
-        if self.config.task == "i2v":
-            # quant_config
-            clip_quantized = self.config.get("clip_quantized", False)
-            if clip_quantized:
-                clip_quant_scheme = self.config.get("clip_quant_scheme", None)
-                assert clip_quant_scheme is not None
-                tmp_clip_quant_scheme = clip_quant_scheme.split("-")[0]
-                clip_quantized_ckpt = self.config.get(
-                    "clip_quantized_ckpt",
-                    os.path.join(
-                        os.path.join(self.config.model_path, tmp_clip_quant_scheme),
-                        f"clip-{tmp_clip_quant_scheme}.pth",
-                    ),
-                )
-            else:
-                clip_quantized_ckpt = None
-                clip_quant_scheme = None
-
-            image_encoder = CLIPModel(
-                dtype=torch.float16,
-                device=self.init_device,
-                checkpoint_path=os.path.join(
-                    self.config.model_path,
-                    "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
-                ),
-                clip_quantized=clip_quantized,
-                clip_quantized_ckpt=clip_quantized_ckpt,
-                quant_scheme=clip_quant_scheme,
-            )
-        return image_encoder
 
     def load_text_encoder(self):
         # offload config
@@ -123,6 +97,47 @@ class WanRunner(DefaultRunner):
         text_encoders = [text_encoder]
         return text_encoders
 
+    def load_image_encoder(self):
+        image_encoder = None
+        if self.config.task == "i2v":
+            # quant_config
+            clip_quantized = self.config.get("clip_quantized", False)
+            if clip_quantized:
+                clip_quant_scheme = self.config.get("clip_quant_scheme", None)
+                assert clip_quant_scheme is not None
+                tmp_clip_quant_scheme = clip_quant_scheme.split("-")[0]
+                clip_quantized_ckpt = self.config.get(
+                    "clip_quantized_ckpt",
+                    os.path.join(
+                        os.path.join(self.config.model_path, tmp_clip_quant_scheme),
+                        f"clip-{tmp_clip_quant_scheme}.pth",
+                    ),
+                )
+            else:
+                clip_quantized_ckpt = None
+                clip_quant_scheme = None
+
+            image_encoder = CLIPModel(
+                dtype=torch.float16,
+                device=self.init_device,
+                checkpoint_path=os.path.join(
+                    self.config.model_path,
+                    "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
+                ),
+                clip_quantized=clip_quantized,
+                clip_quantized_ckpt=clip_quantized_ckpt,
+                quant_scheme=clip_quant_scheme,
+            )
+        return image_encoder
+
+    def load_vae(self):
+        vae_encoder = self.load_vae_encoder()
+        if vae_encoder is None or self.config.get("tiny_vae", False):
+            vae_decoder = self.load_vae_decoder()
+        else:
+            vae_decoder = vae_encoder
+        return vae_encoder, vae_decoder
+
     def load_vae_encoder(self):
         vae_config = {
             "vae_pth": os.path.join(self.config.model_path, "Wan2.1_VAE.pth"),
@@ -151,31 +166,17 @@ class WanRunner(DefaultRunner):
             vae_decoder = WanVAE(**vae_config)
         return vae_decoder
 
-    def load_vae(self):
-        vae_encoder = self.load_vae_encoder()
-        if vae_encoder is None or self.config.get("tiny_vae", False):
-            vae_decoder = self.load_vae_decoder()
-        else:
-            vae_decoder = vae_encoder
-        return vae_encoder, vae_decoder
-
-    def init_scheduler(self):
-        if self.config.get("changing_resolution", False):
-            scheduler = WanScheduler4ChangingResolution(self.config)
-        else:
-            if self.config.feature_caching == "NoCaching":
-                scheduler = WanScheduler(self.config)
-            elif self.config.feature_caching == "Tea":
-                scheduler = WanSchedulerTeaCaching(self.config)
-            elif self.config.feature_caching == "TaylorSeer":
-                scheduler = WanSchedulerTaylorCaching(self.config)
-            elif self.config.feature_caching == "Ada":
-                scheduler = WanSchedulerAdaCaching(self.config)
-            elif self.config.feature_caching == "Custom":
-                scheduler = WanSchedulerCustomCaching(self.config)
-            else:
-                raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
-        self.model.set_scheduler(scheduler)
+    # 2.2 设置text, image编码器
+    def run_image_encoder(self, img):
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            self.image_encoder = self.load_image_encoder()
+        img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
+        clip_encoder_out = self.image_encoder.visual([img[:, None, :, :]], self.config).squeeze(0).to(torch.bfloat16)
+        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
+            del self.image_encoder
+            torch.cuda.empty_cache()
+            gc.collect()
+        return clip_encoder_out
 
     def run_text_encoder(self, text, img):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
@@ -191,17 +192,6 @@ class WanRunner(DefaultRunner):
         text_encoder_output["context"] = context
         text_encoder_output["context_null"] = context_null
         return text_encoder_output
-
-    def run_image_encoder(self, img):
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            self.image_encoder = self.load_image_encoder()
-        img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
-        clip_encoder_out = self.image_encoder.visual([img[:, None, :, :]], self.config).squeeze(0).to(torch.bfloat16)
-        if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
-            del self.image_encoder
-            torch.cuda.empty_cache()
-            gc.collect()
-        return clip_encoder_out
 
     def run_vae_encoder(self, img):
         img = TF.to_tensor(img).sub_(0.5).div_(0.5).cuda()
@@ -224,6 +214,26 @@ class WanRunner(DefaultRunner):
             vae_encode_out = self.get_vae_encoder_output(img, lat_h, lat_w)
             return vae_encode_out
 
+    # 2.3 设置transformer运行方法
+    def init_scheduler(self):
+        if self.config.get("changing_resolution", False):
+            scheduler = WanScheduler4ChangingResolution(self.config)
+        else:
+            if self.config.feature_caching == "NoCaching":
+                scheduler = WanScheduler(self.config)
+            elif self.config.feature_caching == "Tea":
+                scheduler = WanSchedulerTeaCaching(self.config)
+            elif self.config.feature_caching == "TaylorSeer":
+                scheduler = WanSchedulerTaylorCaching(self.config)
+            elif self.config.feature_caching == "Ada":
+                scheduler = WanSchedulerAdaCaching(self.config)
+            elif self.config.feature_caching == "Custom":
+                scheduler = WanSchedulerCustomCaching(self.config)
+            else:
+                raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
+        self.model.set_scheduler(scheduler)
+
+    ##################################################################################################################################
     def get_vae_encoder_output(self, img, lat_h, lat_w):
         h = lat_h * self.config.vae_stride[1]
         w = lat_w * self.config.vae_stride[2]

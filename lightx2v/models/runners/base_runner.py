@@ -29,15 +29,14 @@ class VAEModel(Protocol):
     def decode(self, latents: Any, generator: Optional[Any] = None, config: Optional[Dict[str, Any]] = None) -> Any: ...
 
 
+##########################################################################################################################################################################
+# 1. BaseRunner -> DefaultRunner -> WanRunner
 class BaseRunner(ABC):
-    """Abstract base class for all Runners
-
-    Defines interface methods that all subclasses must implement
-    """
-
+    # 1.1 初始化，就是指定配置
     def __init__(self, config: Dict[str, Any]):
         self.config = config
 
+    ######################################################################################################################################################
     @abstractmethod
     def load_transformer(self) -> TransformerModel:
         """Load transformer model
