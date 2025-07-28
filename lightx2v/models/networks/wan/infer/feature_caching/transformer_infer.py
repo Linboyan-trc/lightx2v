@@ -103,17 +103,22 @@ class WanTransformerInferTeaCaching(WanTransformerInfer):
 
         # 1.2 对于非条件推理
         else:
+            # 1.1 读取决策数组
             index = self.scheduler.step_index
             caching_records_2 = self.scheduler.caching_records_2
+
+            # 1.2 计算当前步骤是否要进行缓存复用
             if index <= self.scheduler.infer_steps - 1:
                 should_calc = self.calculate_should_calc(embed, embed0)
                 self.scheduler.caching_records_2[index] = should_calc
 
+            # 1.3 根据决策数组的结果进行推理
             if caching_records_2[index]:
                 x = self.infer_calculating(weights, grid_sizes, embed, x, embed0, seq_lens, freqs, context)
             else:
                 x = self.infer_using_cache(x)
 
+        # 1.3 如果启用了enable_cfg，要进行状态切换
         if self.config.enable_cfg:
             self.switch_status()
 
