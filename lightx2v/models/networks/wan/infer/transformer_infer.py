@@ -360,6 +360,24 @@ class WanTransformerInfer(BaseTransformerInfer):
         q = self.apply_rotary_emb_func(q, freqs_i)
         k = self.apply_rotary_emb_func(k, freqs_i)
 
+        # 可视化Q*K^T分布（只取第一个head的前1000x1000）
+        try:
+            import matplotlib.pyplot as plt
+            import os
+
+            with torch.no_grad():
+                q_head = q[:, 0, :]  # [32760, 128]
+                k_head = k[:, 0, :]  # [32760, 128]
+                attn_scores = torch.matmul(q_head, k_head.transpose(0, 1))  # [32760, 32760]
+                attn_scores_cpu = attn_scores.cpu().numpy()
+                plt.figure(figsize=(10, 10))
+                plt.imshow(attn_scores_cpu[:1000, :1000], cmap="viridis", aspect="auto")
+                plt.colorbar()
+                os.makedirs(os.path.expanduser("~/Log/07-31/"), exist_ok=True)
+                plt.savefig(os.path.expanduser("~/Log/07-31/qk_attn_scores_head0.png"))
+                plt.close()
+        except Exception as e:
+            print(f"[QK^T plot error]: {e}")
         k_lens = torch.empty_like(seq_lens).fill_(freqs_i.size(0))
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
 
