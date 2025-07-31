@@ -368,7 +368,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             with torch.no_grad():
                 q_head = q[:, 0, :]  # [32760, 128]
                 k_head = k[:, 0, :]  # [32760, 128]
-                attn_scores = torch.matmul(q_head, k_head.transpose(0, 1))  # [32760, 32760]
+                attn_scores = torch.matmul(q_head, k_head.transpose(0, 1)).float()  # [32760, 32760]
                 attn_scores_cpu = attn_scores.cpu().numpy()
                 plt.figure(figsize=(10, 10))
                 plt.imshow(attn_scores_cpu[:1000, :1000], cmap="viridis", aspect="auto")
