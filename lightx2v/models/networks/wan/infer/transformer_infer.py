@@ -360,11 +360,10 @@ class WanTransformerInfer(BaseTransformerInfer):
         q = self.apply_rotary_emb_func(q, freqs_i)
         k = self.apply_rotary_emb_func(k, freqs_i)
 
-        # 可视化softmax(QK^T)分布，分别保存head0、head1、head2的前1000x1000
+        # 可视化QK^T分布，分别保存head0、head1、head2的前1000x1000
         try:
             import matplotlib.pyplot as plt
             import os
-            import torch.nn.functional as F
 
             with torch.no_grad():
                 os.makedirs(os.path.expanduser("~/Log/07-31/"), exist_ok=True)
@@ -372,16 +371,15 @@ class WanTransformerInfer(BaseTransformerInfer):
                     q_head = q[:, head_idx, :]  # [32760, 128]
                     k_head = k[:, head_idx, :]  # [32760, 128]
                     attn_scores = torch.matmul(q_head, k_head.transpose(0, 1)).float()  # [32760, 32760]
-                    attn_softmax = F.softmax(attn_scores, dim=-1)
-                    attn_softmax_cpu = attn_softmax.cpu().numpy()
+                    attn_scores_cpu = attn_scores.cpu().numpy()
                     plt.figure(figsize=(10, 10))
-                    plt.imshow(attn_softmax_cpu[:1000, :1000], cmap="viridis", aspect="auto")
+                    plt.imshow(attn_scores_cpu[:1000, :1000], cmap="viridis", aspect="auto")
                     plt.colorbar()
-                    plt.title(f"Head {head_idx} Softmax(QK^T)")
-                    plt.savefig(os.path.expanduser(f"~/Log/07-31/attn_softmax_head{head_idx}.png"))
+                    plt.title(f"Head {head_idx} QK^T")
+                    plt.savefig(os.path.expanduser(f"~/Log/07-31/attn_raw_head{head_idx}.png"))
                     plt.close()
         except Exception as e:
-            print(f"[QK^T softmax plot error]: {e}")
+            print(f"[QK^T raw plot error]: {e}")
         k_lens = torch.empty_like(seq_lens).fill_(freqs_i.size(0))
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
 
