@@ -21,88 +21,73 @@ from lightx2v.utils.set_config import print_config, set_config, set_parallel_con
 from lightx2v.utils.utils import seed_all
 
 
+######################################################################################################################################################
+# 1. 初始化runner
 def init_runner(config):
+    # 1. 设置随机种子
     seed_all(config.seed)
+
+    # 2. 关闭自动求导机制
+    # 2. 因为推理时用反向传播去更新参数，所以不需要记录自动求导
     torch.set_grad_enabled(False)
+
+    # 3.1 初始化runner，设置配置，设置设备GPU
     runner = RUNNER_REGISTER[config.model_cls](config)
+
+    # 3.2 初始化model
     runner.init_modules()
     return runner
 
 
+######################################################################################################################################################
+# 1. 推理入口
 def main():
+    ##################################################
+    # 1. 解析参数
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model_cls",
-        type=str,
-        required=True,
-        choices=[
-            "wan2.1",
-            "hunyuan",
-            "wan2.1_distill",
-            "wan2.1_causvid",
-            "wan2.1_skyreels_v2_df",
-            "wan2.1_vace",
+        "--model_cls", type=str, required=True, choices=[
+            "wan2.1","hunyuan",
+            "wan2.1_distill","wan2.1_causvid","wan2.1_skyreels_v2_df","wan2.1_vace",
             "cogvideox",
             "seko_talk",
-            "wan2.2_moe",
-            "wan2.2",
-            "wan2.2_moe_audio",
-            "wan2.2_audio",
-            "wan2.2_moe_distill",
+            "wan2.2_moe","wan2.2","wan2.2_moe_audio","wan2.2_audio","wan2.2_moe_distill",
             "qwen_image",
-        ],
-        default="wan2.1",
-    )
-
+        ],default="wan2.1",)
     parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace"], default="t2v")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--config_json", type=str, required=True)
     parser.add_argument("--use_prompt_enhancer", action="store_true")
-
     parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
     parser.add_argument("--negative_prompt", type=str, default="")
-
     parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
     parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
     parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file for audio-to-video (a2v) task")
-
-    parser.add_argument(
-        "--src_ref_images",
-        type=str,
-        default=None,
-        help="The file list of the source reference images. Separated by ','. Default None.",
-    )
-    parser.add_argument(
-        "--src_video",
-        type=str,
-        default=None,
-        help="The file of the source video. Default None.",
-    )
-    parser.add_argument(
-        "--src_mask",
-        type=str,
-        default=None,
-        help="The file of the source mask. Default None.",
-    )
-
+    parser.add_argument("--src_ref_images",type=str,default=None,help="The file list of the source reference images. Separated by ','. Default None.",)
+    parser.add_argument("--src_video",type=str,default=None,help="The file of the source video. Default None.",)
+    parser.add_argument("--src_mask",type=str,default=None,help="The file of the source mask. Default None.",)
     parser.add_argument("--save_video_path", type=str, default="./output_lightx2v.mp4", help="The path to save video path/file")
     args = parser.parse_args()
 
-    # set config
+    # 2. 设置配置
     config = set_config(args)
 
+    # 3. 分布式推理
     if config.parallel:
         dist.init_process_group(backend="nccl")
         torch.cuda.set_device(dist.get_rank())
         set_parallel_config(config)
-
     print_config(config)
 
+    # 4. 开始推理
     with ProfilingContext4DebugL1("Total Cost"):
+        # 4.1 初始化runner
         runner = init_runner(config)
+
+        # 4.2 开始推理
         runner.run_pipeline()
 
-    # Clean up distributed process group
+    # 5. 分布式训练进程清理
     if dist.is_initialized():
         dist.destroy_process_group()
         logger.info("Distributed process group cleaned up")
