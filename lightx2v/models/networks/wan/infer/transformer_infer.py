@@ -162,7 +162,7 @@ class WanTransformerInfer(BaseTransformerInfer):
         k = self.apply_rotary_emb_func(k, freqs_i)
 
         # 0～11head:
-        for head in range(num_heads):
+        for head in range(12):
             q_head = q[:, head, :]  # [seq, head_dim]
             k_head = k[:, head, :]  # [seq, head_dim]
             attn = torch.matmul(q_head, k_head.T)  # [seq, seq]
