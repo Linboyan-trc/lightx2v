@@ -167,7 +167,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             k_head = k[:, head, :]  # [seq, head_dim]
             attn = torch.matmul(q_head, k_head.T)  # [seq, seq]
             plt.figure(figsize=(6, 5))
-            plt.imshow(attn.cpu(), aspect='auto', cmap='viridis')
+            plt.imshow(attn.cpu().float(), aspect='auto', cmap='viridis')
             plt.colorbar()
             plt.title(f"Head {head}")
             plt.tight_layout()
