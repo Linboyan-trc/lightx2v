@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path=
-model_path=
+lightx2v_path="/home/yangrongjin/lightx2v"
+model_path="/mtc/yongyang/models/x2v_models/wan/Wan2.1-T2V-1.3B"
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh

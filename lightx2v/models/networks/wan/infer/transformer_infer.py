@@ -7,6 +7,9 @@ from lightx2v.utils.envs import *
 
 from .utils import apply_rotary_emb, apply_rotary_emb_chunk, compute_freqs, compute_freqs_dist
 
+import os
+import matplotlib.pyplot as plt
+
 
 class WanTransformerInfer(BaseTransformerInfer):
     def __init__(self, config):
@@ -157,6 +160,22 @@ class WanTransformerInfer(BaseTransformerInfer):
 
         q = self.apply_rotary_emb_func(q, freqs_i)
         k = self.apply_rotary_emb_func(k, freqs_i)
+
+        # 0～11head:
+        for head in range(num_heads):
+            q_head = q[:, head, :]  # [seq, head_dim]
+            k_head = k[:, head, :]  # [seq, head_dim]
+            attn = torch.matmul(q_head, k_head.T)  # [seq, seq]
+            plt.figure(figsize=(6, 5))
+            plt.imshow(attn, aspect='auto', cmap='viridis')
+            plt.colorbar()
+            plt.title(f"Head {head}")
+            plt.tight_layout()
+            save_path = os.path.expanduser(
+                f"~/Log/09-17/head_{head}.png"
+            )
+            plt.savefig(save_path)
+            plt.close()
 
         k_lens = torch.empty_like(seq_lens).fill_(freqs_i.size(0))
         cu_seqlens_q, cu_seqlens_k = self._calculate_q_k_len(q, k_lens=k_lens)
