@@ -172,7 +172,7 @@ class WanTransformerInfer(BaseTransformerInfer):
             plt.title(f"Head {head}")
             plt.tight_layout()
             save_path = os.path.expanduser(
-                f"~/Log/09-17/head_{head}.png"
+                f"~/Log/09-17/Prompt1/head_{head}.png"
             )
             plt.savefig(save_path)
             plt.close()
