@@ -1,7 +1,3 @@
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import argparse
 
 import torch
@@ -44,78 +40,59 @@ def init_runner(config):
 def main():
     ##################################################
     # 1. 解析参数
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
-    # parser.add_argument(
-    #     "--model_cls",
-    #     type=str,
-    #     required=True,
-    #     choices=[
-    #         "wan2.1",
-    #         "wan2.1_distill",
-    #         "wan2.1_vace",
-    #         "wan2.1_sf",
-    #         "seko_talk",
-    #         "wan2.2_moe",
-    #         "wan2.2",
-    #         "wan2.2_moe_audio",
-    #         "wan2.2_audio",
-    #         "wan2.2_moe_distill",
-    #         "qwen_image",
-    #         "wan2.2_animate",
-    #     ],
-    #     default="wan2.1",
-    # )
-    # parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v"], default="t2v")
-    # parser.add_argument("--model_path", type=str, required=True)
-    # parser.add_argument("--sf_model_path", type=str, required=False)
-    # parser.add_argument("--config_json", type=str, required=True)
-    # parser.add_argument("--use_prompt_enhancer", action="store_true")
-    # parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
-    # parser.add_argument("--negative_prompt", type=str, default="")
-    # parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
-    # parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
-    # parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
-    # parser.add_argument(
-    #     "--src_ref_images",
-    #     type=str,
-    #     default=None,
-    #     help="The file list of the source reference images. Separated by ','. Default None.",
-    # )
-    # parser.add_argument(
-    #     "--src_video",
-    #     type=str,
-    #     default=None,
-    #     help="The file of the source video. Default None.",
-    # )
-    # parser.add_argument(
-    #     "--src_mask",
-    #     type=str,
-    #     default=None,
-    #     help="The file of the source mask. Default None.",
-    # )
-    # parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
-    # parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
-    # args = parser.parse_args()
-    class Args:
-        seed = 42
-        model_cls = "wan2.1"
-        task = "t2v"
-        model_path = "/data/nvme0/models/Wan-AI/Wan2.1-T2V-1.3B"
-        config_json = "/home/yangrongjin/lightx2v/configs/wan/wan_t2v.json"
-        use_prompt_enhancer = False
-        prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
-        negative_prompt = "镜头晃动，色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
-        image_path = ""
-        last_frame_path = ""
-        audio_path = ""
-        src_ref_images = None
-        src_video = None
-        src_mask = None
-        save_result_path = "/home/yangrongjin/lightx2v/save_results/output_lightx2v_wan_t2v.mp4"
-        return_result_tensor = False
-
-    args = Args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42, help="The seed for random generator")
+    parser.add_argument(
+        "--model_cls",
+        type=str,
+        required=True,
+        choices=[
+            "wan2.1",
+            "wan2.1_distill",
+            "wan2.1_vace",
+            "wan2.1_sf",
+            "seko_talk",
+            "wan2.2_moe",
+            "wan2.2",
+            "wan2.2_moe_audio",
+            "wan2.2_audio",
+            "wan2.2_moe_distill",
+            "qwen_image",
+            "wan2.2_animate",
+        ],
+        default="wan2.1",
+    )
+    parser.add_argument("--task", type=str, choices=["t2v", "i2v", "t2i", "i2i", "flf2v", "vace", "animate", "s2v"], default="t2v")
+    parser.add_argument("--model_path", type=str, required=True)
+    parser.add_argument("--sf_model_path", type=str, required=False)
+    parser.add_argument("--config_json", type=str, required=True)
+    parser.add_argument("--use_prompt_enhancer", action="store_true")
+    parser.add_argument("--prompt", type=str, default="", help="The input prompt for text-to-video generation")
+    parser.add_argument("--negative_prompt", type=str, default="")
+    parser.add_argument("--image_path", type=str, default="", help="The path to input image file for image-to-video (i2v) task")
+    parser.add_argument("--last_frame_path", type=str, default="", help="The path to last frame file for first-last-frame-to-video (flf2v) task")
+    parser.add_argument("--audio_path", type=str, default="", help="The path to input audio file or directory for audio-to-video (s2v) task")
+    parser.add_argument(
+        "--src_ref_images",
+        type=str,
+        default=None,
+        help="The file list of the source reference images. Separated by ','. Default None.",
+    )
+    parser.add_argument(
+        "--src_video",
+        type=str,
+        default=None,
+        help="The file of the source video. Default None.",
+    )
+    parser.add_argument(
+        "--src_mask",
+        type=str,
+        default=None,
+        help="The file of the source mask. Default None.",
+    )
+    parser.add_argument("--save_result_path", type=str, default=None, help="The path to save video path/file")
+    parser.add_argument("--return_result_tensor", action="store_true", help="Whether to return result tensor. (Useful for comfyui)")
+    args = parser.parse_args()
     seed_all(args.seed)
 
     # 2. 设置配置
