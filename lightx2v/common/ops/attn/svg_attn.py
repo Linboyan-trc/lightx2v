@@ -294,14 +294,16 @@ def get_attention_mask(mask_name, sample_mse_max_row, context_length, num_frame,
 
 @ATTN_WEIGHT_REGISTER("svg_attn")
 class SvgAttnWeight(AttnWeightTemplate):
+    # 1. 指定形状
     head_num = None
     head_dim = None
     sample_mse_max_row = None
     num_sampled_rows = None
     context_length = None
+    sparsity = None
+    
     num_frame = None
     frame_size = None
-    sparsity = None
     mask_name_list = ["spatial", "temporal"]
     attention_masks = None
     block_mask = None
@@ -324,6 +326,7 @@ class SvgAttnWeight(AttnWeightTemplate):
         self.config = {}
         self.sparse_attention = torch.compile(flex_attention, dynamic=False, mode="max-autotune-no-cudagraphs")
 
+    # 2. 计算
     @classmethod
     def prepare_mask(cls, num_frame, frame_size):
         # Use class attributes so updates affect all instances of this class
@@ -398,11 +401,16 @@ class SvgAttnWeight(AttnWeightTemplate):
 
 
 if __name__ == "__main__":
-    q, k, v = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda()
+    # 1. 准备q, k, v
+    q = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), 
+    k = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), 
+    v = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda()
 
+    # 2. 指定形状
     SvgAttnWeight.prepare(head_num=40, head_dim=128, sample_mse_max_row=10000, num_sampled_rows=64, context_length=0, sparsity=0.25)
     svg_attn = SvgAttnWeight()
     print("SvgAttnWeight initialized.")
 
+    # 3. 计算
     out = svg_attn.apply(q, k, v)
     print(f"out: {out.shape}, {out.dtype}, {out.device}")
