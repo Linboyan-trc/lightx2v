@@ -1,4 +1,5 @@
 #!/bin/bash
+export TORCH_DISABLE_ADDR2LINE=1
 
 # set path and first
 lightx2v_path="/home/yangrongjin/lightx2v"
