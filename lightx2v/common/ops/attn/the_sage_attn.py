@@ -1,4 +1,6 @@
 import spas_sage_attn
+import pkgutil
+
 for module_info in pkgutil.iter_modules(spas_sage_attn.__path__):
     print(module_info.name)
 
