@@ -5,6 +5,8 @@ lightx2v_path="/home/yangrongjin/lightx2v"
 model_path="/data/nvme0/models/Wan-AI/Wan2.1-T2V-1.3B"
 
 export CUDA_VISIBLE_DEVICES=1
+export CUDA_LAUNCH_BLOCKING=1
+export TORCH_SHOW_CPP_STACKTRACES=1
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
