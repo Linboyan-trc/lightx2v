@@ -2,7 +2,7 @@
 
 # set path and first
 lightx2v_path="/root/lightx2v"
-model_path="/models/Wan-AI/Wan2.1-T2V-1.3B"
+model_path="/models/Wan-AI/Wan2.1-I2V-14B-480P"
 
 export CUDA_VISIBLE_DEVICES=0
 
