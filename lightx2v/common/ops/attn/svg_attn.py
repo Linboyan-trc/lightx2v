@@ -402,8 +402,8 @@ class SvgAttnWeight(AttnWeightTemplate):
 
 if __name__ == "__main__":
     # 1. 准备q, k, v
-    q = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), 
-    k = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda(), 
+    q = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda()
+    k = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda() 
     v = torch.randn(32130, 40, 128, dtype=torch.bfloat16).cuda()
 
     # 2. 指定形状
