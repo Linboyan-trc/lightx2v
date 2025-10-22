@@ -17,6 +17,12 @@ attn_weights = torch.softmax(attn_weights, dim=-1)
 output_pt = torch.matmul(attn_weights, v_)
 
 # 3. 用spas_sage2_attn_meansim_cuda计算注意力
+q = q.unsqueeze(0)  # shape: (1, 32760, 12, 128)
+k = k.unsqueeze(0)
+v = v.unsqueeze(0)
+q = q.transpose(1, 2)  # shape: (1, 12, 32760, 128)
+k = k.transpose(1, 2)
+v = v.transpose(1, 2)
 output_cuda = spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout="NHD")
 output_cuda = output_cuda.float()
 
