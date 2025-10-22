@@ -9,8 +9,8 @@ from .template import AttnWeightTemplate
 @ATTN_WEIGHT_REGISTER("sage_attn")
 class SageAttnWeight(AttnWeightTemplate):
     @classmethod
-    def apply(self, q, k, v, tensor_layout="HND"):
-        pass
+    def apply(self, q, k, v, tensor_layout="NHD"):
+        return spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout)
 
 if __name__ == "__main__":
     # 1. 构造输入
