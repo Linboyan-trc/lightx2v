@@ -31,8 +31,8 @@ class SageAttnWeight(AttnWeightTemplate):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
         attn_out = spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout)
-        attn_out = attn_out.permute(2, 1, 3, 0).contiguous()  # [32760, 40, 128, 1]
-        attn_out = attn_out.view(32760, 40 * 128)  # [32760, 5120]
+        _, H, N, D = attn_out.shape
+        attn_out = attn_out.permute(2, 1, 3, 0).contiguous().view(N, H * D)
         return attn_out
 
 if __name__ == "__main__":
