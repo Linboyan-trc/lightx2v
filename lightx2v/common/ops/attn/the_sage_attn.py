@@ -12,7 +12,18 @@ class SageAttnWeight(AttnWeightTemplate):
         self.config = {}
         
     @classmethod
-    def apply(self, q, k, v, tensor_layout="NHD"):
+    def apply(
+        self,
+        q,
+        k,
+        v,
+        cu_seqlens_q=None,
+        cu_seqlens_kv=None,
+        max_seqlen_q=None,
+        max_seqlen_kv=None,
+        model_cls=None,
+        tensor_layout="NHD"
+    ):
         return spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout)
 
 if __name__ == "__main__":
