@@ -20,7 +20,10 @@ output_pt = torch.matmul(attn_weights, v_)
 q = q.unsqueeze(0)  # shape: (1, 32760, 12, 128)
 k = k.unsqueeze(0)
 v = v.unsqueeze(0)
-output_cuda = spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout="NHD")
+q = q.transpose(1, 2)  # shape: (1, 12, 32760, 128)
+k = k.transpose(1, 2)
+v = v.transpose(1, 2)
+output_cuda = spas_sage_attn.core.spas_sage2_attn_meansim_cuda(q, k, v, tensor_layout="HND")
 output_cuda = output_cuda.float()
 
 # 4. 取左上角[3000, 3000]，只取第一个head
