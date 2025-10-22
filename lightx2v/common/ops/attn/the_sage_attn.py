@@ -28,7 +28,7 @@ output_cuda = output_cuda.float()
 
 # 4. 取左上角[3000, 3000]，只取第一个head
 output_pt_crop = output_pt[0, :3000, :3000].cpu().detach().numpy()
-output_cuda_crop = output_cuda[0, :3000, :3000].cpu().detach().numpy()
+output_cuda_crop = output_cuda[0, 0, :3000, :3000].cpu().detach().numpy()
 
 # 5. 保存图片
 save_dir = os.path.expanduser("~/Log/10-22/")
