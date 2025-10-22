@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # set path and first
-lightx2v_path="/home/yangrongjin/lightx2v"
-model_path="/data/nvme0/models/Wan-AI/Wan2.1-T2V-14B"
+lightx2v_path="/root/lightx2v"
+model_path="/models/Wan-AI/Wan2.1-T2V-14B"
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 
 # set environment variables
 source ${lightx2v_path}/scripts/base/base.sh
